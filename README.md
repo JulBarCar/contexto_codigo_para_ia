@@ -58,9 +58,7 @@ python code_context.py ruta/a/tu/proyecto
 
 ---
 
-# 📘 README — Opción 1 (usar archivos incluidos)
-
-## 🔹 Usar el comando `contexto` (forma recomendada)
+## #🔹 Usar el comando `contexto` (forma recomendada)
 
 Este repositorio ya incluye:
 
@@ -71,7 +69,7 @@ No necesitás editar rutas ni modificar nada 👍
 
 ---
 
-## 🧩 Paso 1: ubicar los archivos
+### 🧩 Paso 1: ubicar los archivos
 
 Ejemplo:
 
@@ -91,11 +89,11 @@ o en Linux:
 
 ---
 
-## ⚙️ Paso 2: agregar al PATH
+### ⚙️ Paso 2: agregar al PATH
 
 ---
 
-### 🪟 Windows (PATH)
+#### 🪟 Windows (PATH)
 
 1. Copiá la ruta de la carpeta (ej: `C:\tools\code-context`)
 
@@ -111,7 +109,7 @@ o en Linux:
 
 ---
 
-### 🐧 Linux / Mac / Git Bash
+#### 🐧 Linux / Mac / Git Bash
 
 Editar tu config:
 
