@@ -1,171 +1,119 @@
-
----
-
 # 📦 code_context.py
 
-Herramienta CLI en Python para generar un **contexto completo de código** a partir de un proyecto.
+Herramienta CLI en Python para generar **contexto de código** a partir de un proyecto, listo para pasarle a una IA.
 
 Pensado para:
 
-* Pasar tu código a una IA
-* Revisar cambios recientes
-* Tener snapshots del proyecto
+- Pasar tu código a una IA de forma ordenada y eficiente
+- Explorar la estructura de un proyecto antes de decidir qué compartir
+- Revisar solo los archivos que cambiaron desde el último pull
 
 ---
 
-# 🚀 ¿Qué hace?
+## 🚀 ¿Qué genera?
 
-Genera automáticamente:
-
-* `contexto_codigo.txt` → todo el código del proyecto
-* `cambios_git.txt` → solo archivos modificados desde el último pull (si es repo git)
+| Archivo               | Cuándo se genera      | Contenido                                      |
+| --------------------- | --------------------- | ---------------------------------------------- |
+| `contexto_codigo.txt` | Siempre (modo normal) | Todo el código del proyecto                    |
+| `cambios_git.txt`     | Si es repo git        | Solo archivos modificados desde el último pull |
+| `mapa_contexto.txt`   | Con `--co`            | Árbol + dependencias + fichas, **sin código**  |
 
 ---
 
-# 📁 Estructura recomendada
+## ⚙️ Requisitos
 
-Podés tener algo así:
+- Python 3.10+
+
+No requiere dependencias externas.
+
+---
+
+## 📁 Estructura recomendada
 
 ```
 code-context/
-│
 ├── code_context.py
-├── contexto.bat
-├── contexto.sh
+├── contexto.bat     ← Windows
+└── contexto.sh      ← Linux / Mac
 ```
 
 ---
 
-# ⚙️ Instalación y uso básico
+## 🔧 Instalación
 
-## 1. Requisitos
+### 1. Crear los scripts de atajo
 
-* Python 3.8+
+Si no tenés los archivos `.bat` o `.sh`, creálos a mano:
 
----
+#### 🪟 Windows — `contexto.bat`
 
-## 2. Ejecutar directamente
+Creá un archivo llamado `contexto.bat` en la misma carpeta que `code_context.py` con este contenido:
+
+```bat
+@echo off
+python "%~dp0code_context.py" %*
+```
+
+#### 🐧 Linux / Mac — `contexto.sh`
+
+Creá un archivo llamado `contexto.sh`:
 
 ```bash
-python code_context.py
+#!/bin/bash
+python3 "$(dirname "$0")/code_context.py" "$@"
 ```
 
-O indicando carpeta:
+Luego dále permisos de ejecución:
 
 ```bash
-python code_context.py ruta/a/tu/proyecto
+chmod +x contexto.sh
 ```
 
----
-
-## #🔹 Usar el comando `contexto` (forma recomendada)
-
-Este repositorio ya incluye:
-
-* `contexto.bat` → Windows
-* `contexto.sh` → Linux / Git Bash
-
-No necesitás editar rutas ni modificar nada 👍
-
----
-
-### 🧩 Paso 1: ubicar los archivos
-
-Ejemplo:
-
-```id="k8r2f1"
-C:\tools\code-context\
-├── code_context.py
-├── contexto.bat
-```
-
-o en Linux:
-
-```id="z9p4x2"
-~/tools/code-context/
-├── code_context.py
-├── contexto.sh
-```
-
----
-
-### ⚙️ Paso 2: agregar al PATH
-
----
-
-#### 🪟 Windows (PATH)
-
-1. Copiá la ruta de la carpeta (ej: `C:\tools\code-context`)
-
-2. Abrí:
-
-   * “Editar variables de entorno del sistema”
-
-3. En **Path** → “Editar” → “Nuevo”
-
-4. Pegá la ruta
-
-5. Aceptar todo
-
----
-
-#### 🐧 Linux / Mac / Git Bash
-
-Editar tu config:
-
-```bash
-nano ~/.bashrc
-```
-
-Agregar:
-
-```bash
-export PATH="$PATH:/home/tu-usuario/tools/code-context"
-```
-
-Aplicar:
-
-```bash
-source ~/.bashrc
-```
-
----
-
-## ⚠️ Nota importante (Linux)
-
-Para usar `contexto` sin `.sh`, podés:
-
-### Opción A (simple)
-
-Usar:
-
-```bash
-contexto.sh
-```
-
----
-
-### Opción B (mejor)
-
-Renombrar:
+Opcionalmente, renombralo para usarlo sin extensión:
 
 ```bash
 mv contexto.sh contexto
 chmod +x contexto
 ```
 
-Ahora podés usar:
-
-```bash
-contexto
-```
-
 ---
 
+### 2. Agregar al PATH (opcional pero recomendado)
 
-## 🔹 Opción 2: perfil de PowerShell
+Hacerlo te permite escribir `contexto` desde cualquier carpeta.
 
-Abrí tu perfil:
+#### 🪟 Windows
+
+1. Copiá la ruta de la carpeta (ej: `C:\tools\code-context`)
+2. Buscá "Editar variables de entorno del sistema"
+3. En **Path** → "Editar" → "Nuevo"
+4. Pegá la ruta → Aceptar todo
+
+#### 🐧 Linux / Mac
+
+```bash
+nano ~/.bashrc   # o ~/.zshrc si usás zsh
+```
+
+Agregá:
+
+```bash
+export PATH="$PATH:/home/tu-usuario/tools/code-context"
+```
+
+Aplicá los cambios:
+
+```bash
+source ~/.bashrc
+```
+
+#### 🐧 Alternativa: alias
+
+```bash
+alias contexto='python3 /ruta/a/code_context.py'
+```
+
+#### 🪟 Alternativa: perfil de PowerShell
 
 ```powershell
 notepad $PROFILE
@@ -179,234 +127,213 @@ function contexto {
 }
 ```
 
-Reiniciás la terminal y listo.
-
 ---
 
-## 🔹 Opción 3: alias en Bash
+## 🧠 Uso
+
+### Sintaxis general
 
 ```bash
-nano ~/.bashrc
+contexto [carpeta] [opciones]
 ```
 
-Agregá:
+Si no se indica carpeta, usa la carpeta actual (`.`).
+
+### Ejemplos rápidos
 
 ```bash
-alias contexto='python /ruta/a/code_context.py'
-```
-
-Aplicar cambios:
-
-```bash
-source ~/.bashrc
-```
-
-# 🧠 Uso del comando
-
-## ✔️ Sin argumentos
-
-```bash
-contexto
-```
-
-* Usa la carpeta actual (`.`)
-* Genera los archivos según configuración
-
----
-
-## ✔️ Con argumento
-
-```bash
-contexto ruta/al/proyecto
-```
-
-Ejemplo:
-
-```bash
-contexto ../mi-backend
+contexto                        # carpeta actual, modo completo
+contexto ../mi-backend          # carpeta específica
+contexto . --co                 # mapa de contexto sin código
+contexto . --init               # genera config de ejemplo
+contexto . --solo-cambios       # solo archivos modificados en git
+contexto . --sin-minimos        # omite lockfiles y archivos auto-generados
+contexto . --limite 300         # omite archivos de más de 300 líneas
+contexto . --verbose            # muestra qué archivos se omiten y por qué
 ```
 
 ---
 
-# 🧾 Archivo de configuración
+## 📋 Referencia de argumentos
 
-Podés personalizar el comportamiento creando:
+| Argumento        | Descripción                                                    |
+| ---------------- | -------------------------------------------------------------- |
+| `--init`         | Genera un `.codigo_config.json` de ejemplo con comentarios     |
+| `--co`           | Modo "context only": árbol + dependencias + fichas, sin código |
+| `--solo-cambios` | Solo genera el archivo de cambios git                          |
+| `--limite N`     | Omite archivos con más de N líneas                             |
+| `--sin-minimos`  | Omite lockfiles, `.min.js`, y otros auto-generados             |
+| `--verbose`      | Muestra detalle de archivos omitidos                           |
+| `--ayuda`        | Muestra ayuda                                                  |
+
+---
+
+## 🗺️ Modo `--co` (Context Only)
+
+Este modo está pensado para **explorar antes de compartir**.
+
+Genera un archivo liviano que incluye:
+
+- Árbol de archivos del proyecto
+- Ficha por archivo (líneas, extensión, qué importa)
+- Grafo de dependencias internas (qué archivos se llaman entre sí)
+- Últimos commits de git
+
+**No incluye ninguna línea de código.**
+
+Flujo recomendado:
 
 ```
-.codigo_config.json
+1. Corrés --co y revisás el mapa
+2. Decidís qué carpetas o archivos son relevantes para tu tarea
+3. Los configurás en "incluir_solo" o usás --solo-cambios
+4. Generás el contexto final y lo pasás a la IA
+```
+
+```bash
+contexto . --co
 ```
 
 ---
 
-## 📍 Ubicación
+## 🧾 Archivo de configuración
 
-Debe estar en la raíz del proyecto:
+Podés personalizar el comportamiento creando `.codigo_config.json` en la raíz de tu proyecto.
 
+La forma más fácil es generarlo con `--init`:
+
+```bash
+contexto . --init
 ```
-/mi-proyecto/.codigo_config.json
-```
 
----
+Esto crea un archivo de ejemplo con todos los campos explicados. Editalo según tu proyecto.
 
-## 🧩 Ejemplo completo
+### Ejemplo completo
 
 ```json
 {
-  "nombre_salida": "mi_contexto.txt",
-  "nombre_salida_cambios": "mis_cambios.txt",
-  "extensiones": [".ts", ".tsx", ".js"],
-  "ignorar": ["node_modules", ".git"],
-  "incluir_solo": ["src", "components"],
-  "carpeta_salida": "../contextos"
+  "descripcion": "API REST en FastAPI para gestión de inventario.",
+  "extensiones": [".py", ".js", ".ts"],
+  "ignorar": ["node_modules", ".git", "dist"],
+  "incluir_solo": ["src", "api", "components"],
+  "limite_lineas": 500,
+  "omitir_autogenerados": true,
+  "carpeta_salida": "../contextos",
+  "nombre_salida": "contexto_codigo.txt",
+  "nombre_salida_cambios": "cambios_git.txt",
+  "nombre_salida_co": "mapa_contexto.txt"
 }
 ```
 
----
+### Opciones explicadas
 
-# ⚙️ Opciones explicadas
+#### `descripcion`
 
-## 📝 `nombre_salida`
-
-Nombre del archivo con TODO el código.
+Una oración que describe tu proyecto. Aparece al inicio del archivo de contexto, antes del código. La IA la lee primero y orienta todo el análisis posterior.
 
 ```json
-"nombre_salida": "mi_contexto.txt"
+"descripcion": "Backend en Node.js para una app de delivery. Usa Express y PostgreSQL."
 ```
 
----
+#### `extensiones`
 
-## 🔄 `nombre_salida_cambios`
-
-Archivo con SOLO cambios de git.
-
-```json
-"nombre_salida_cambios": "mis_cambios.txt"
-```
-
----
-
-## 📂 `extensiones`
-
-Extensiones a incluir.
+Extensiones de archivo a incluir.
 
 ```json
 "extensiones": [".py", ".js", ".ts"]
 ```
 
-👉 Default:
+Default: `.py`, `.js`, `.ts`, `.jsx`, `.tsx`, `.html`, `.css`
 
-* `.py`, `.js`, `.ts`, `.jsx`, `.tsx`, `.html`, `.css`
+#### `ignorar`
 
----
-
-## 🚫 `ignorar`
-
-Archivos/carpetas a excluir.
+Carpetas o archivos a excluir.
 
 ```json
-"ignorar": ["node_modules", ".git", "dist"]
+"ignorar": ["node_modules", ".git", "dist", "venv"]
 ```
 
-👉 Default:
+Default: `node_modules`, `.git`, `__pycache__`, `dist`, `.env`, `venv`, `build`
 
-* node_modules, .git, **pycache**, dist, .env
+#### `incluir_solo`
 
----
-
-## 🎯 `incluir_solo`
-
-Limita el análisis a carpetas específicas.
+Si se define, solo se analizan estas carpetas raíz. Todo lo demás se ignora.
 
 ```json
-"incluir_solo": ["src", "components"]
+"incluir_solo": ["src", "api"]
 ```
 
-👉 Si se usa:
+#### `limite_lineas`
 
-* Ignora todo lo demás fuera de esas carpetas
-
----
-
-## 📦 `carpeta_salida`
-
-Dónde se guardan los archivos generados.
-
-### Ruta absoluta
+Archivos con más líneas que este valor se omiten. Útil para reducir tokens.
 
 ```json
-"carpeta_salida": "C:/contextos"
+"limite_lineas": 500
 ```
 
-### Ruta relativa
+Default: sin límite
+
+#### `omitir_autogenerados`
+
+Si es `true`, omite automáticamente:
+
+- Lockfiles: `package-lock.json`, `yarn.lock`, `poetry.lock`, `Pipfile.lock`, `go.sum`, etc.
+- Archivos minificados: `*.min.js`, `*.bundle.js`, `*.chunk.js`
+- Archivos auto-generados: `*_pb2.py` (protobuf), `*.generated.*`, migraciones auto-numeradas
+- Archivos con primera línea mayor a 500 caracteres (heurística de minificado)
+
+```json
+"omitir_autogenerados": true
+```
+
+#### `carpeta_salida`
+
+Dónde guardar los archivos generados. Acepta rutas absolutas o relativas al proyecto.
 
 ```json
 "carpeta_salida": "../contextos"
 ```
 
-### Default
-
-Si no se define:
-
-```
-.codigo_completo/
-```
-
----
-
-# 🧠 Cómo funciona internamente
-
-* Recorre todo el proyecto
-* Filtra por:
-
-  * extensiones
-  * carpetas ignoradas
-  * carpetas incluidas
-* Genera:
-
-  * árbol de archivos
-  * contenido completo concatenado
+Default: carpeta `.codigo_completo/` dentro del proyecto
 
 ---
 
 ## 🔄 Integración con Git
 
-Si el proyecto es un repo:
+Si el proyecto es un repositorio git, el script genera automáticamente `cambios_git.txt` con:
 
-* Usa `ORIG_HEAD → HEAD` (último pull)
-* Si no existe:
+- Los archivos que cambiaron entre `ORIG_HEAD` y `HEAD` (después de un pull/merge/rebase)
+- Si no existe `ORIG_HEAD`: los cambios staged y unstaged sin commitear
+- Los últimos 5 commits incluidos como contexto en el encabezado del archivo
 
-  * usa cambios no commiteados
-
-Si no es repo:
-
-* simplemente no genera `cambios_git.txt`
+Si la carpeta no es un repo git, simplemente no genera el archivo de cambios.
 
 ---
 
-# 💡 Ejemplos reales
+## 📂 Orden de archivos
 
-```bash
-contexto
-```
+Los archivos se ordenan para que la IA construya el modelo mental del proyecto de arriba hacia abajo:
 
-```bash
-contexto .
-```
-
-```bash
-contexto ../api
-```
+1. Primero los archivos en la raíz del proyecto
+2. Dentro de cada nivel, los archivos clave van primero: `main`, `index`, `app`, `server`, `__init__`, `config`, `settings`, `manage`, etc.
+3. Luego el resto, ordenado alfabéticamente
 
 ---
 
-# 🧪 Tip útil
-
-Podés hacer:
+## 💡 Tips
 
 ```bash
-contexto && code .codigo_completo/contexto_codigo.txt
-```
+# Ver el mapa del proyecto y abrirlo directo
+contexto . --co && code .codigo_completo/mapa_contexto.txt
 
-o subir directamente ese archivo a una IA.
+# Generar contexto solo de los cambios y abrirlo
+contexto . --solo-cambios && code .codigo_completo/cambios_git.txt
+
+# Proyecto grande: omitir auto-generados y limitar tamaño de archivos
+contexto . --sin-minimos --limite 400
+
+# Ver exactamente qué se está omitiendo
+contexto . --verbose
+```
 
 ---

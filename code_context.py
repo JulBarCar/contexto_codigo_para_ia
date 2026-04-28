@@ -1,57 +1,140 @@
 """
-unificar_codigo.py
+code_context.py
 Recorre la carpeta del proyecto y unifica todos los archivos de código
 en un único archivo de texto, listo para pasar a una IA.
 
-Genera dos archivos:
-  1. contexto_codigo.txt  → todo el proyecto (igual que antes)
-  2. cambios_git.txt      → solo los archivos modificados desde el último pull
+Genera hasta tres archivos:
+  1. contexto_codigo.txt   → todo el proyecto
+  2. cambios_git.txt       → solo archivos modificados desde el último pull
+  3. (con --co)            → mapa de contexto sin código (solo estructura)
 
 Configuración opcional: crea un archivo '.codigo_config.json' en la raíz
-del proyecto para personalizar el comportamiento. Si no existe, funciona
-con los valores por defecto.
+del proyecto. Si no existe, funciona con los valores por defecto.
+Usa `--init` para generar un archivo de configuración de ejemplo.
 
-Ejemplo de .codigo_config.json:
+USO:
+  python code_context.py [carpeta] [opciones]
+
+OPCIONES:
+  --init          Genera .codigo_config.json de ejemplo en la carpeta indicada
+  --co            Solo contexto: árbol + dependencias + propósito, sin código
+  --solo-cambios  Solo genera el archivo de cambios git (no el contexto completo)
+  --limite N      Omite archivos con más de N líneas (default: sin límite)
+  --sin-minimos   Omite archivos auto-generados (minificados, lockfiles, etc.)
+  --verbose       Muestra qué archivos se omiten y por qué
+  --ayuda         Muestra esta ayuda
+
+EJEMPLO .codigo_config.json:
 {
+    "descripcion": "API REST en FastAPI para gestión de inventario.",
     "nombre_salida": "mi_contexto.txt",
     "nombre_salida_cambios": "mis_cambios.txt",
+    "nombre_salida_co": "mapa_proyecto.txt",
     "extensiones": [".ts", ".tsx", ".js", ".jsx"],
     "ignorar": ["node_modules", ".git", "dist"],
     "incluir_solo": ["src", "hooks", "components"],
-    "carpeta_salida": "/ruta/absoluta/a/mi/carpeta_contextos"
+    "carpeta_salida": "../contextos",
+    "limite_lineas": 500,
+    "omitir_autogenerados": true
 }
-
-El campo "carpeta_salida" es opcional. Acepta:
-  - Ruta absoluta:  "/home/usuario/contextos"
-  - Ruta relativa al proyecto:  "../contextos"
-  - Si se omite, se usa la carpeta ".codigo_completo" dentro del proyecto.
-
-Todos los campos son opcionales.
 """
 
 import os
 import sys
+import ast
 import json
+import re
 import subprocess
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
 # ── Valores por defecto ───────────────────────────────────────────────────────
 
-DEFAULT_EXTENSIONES       = {".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css"}
-DEFAULT_IGNORAR           = {"node_modules", ".git", "__pycache__", "dist", ".env"}
-DEFAULT_NOMBRE_SALIDA     = "contexto_codigo.txt"
-DEFAULT_NOMBRE_CAMBIOS    = "cambios_git.txt"
-CARPETA_SALIDA_DEFAULT    = ".codigo_completo"
-NOMBRE_CONFIG             = ".codigo_config.json"
+DEFAULT_EXTENSIONES    = {".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css"}
+DEFAULT_IGNORAR        = {"node_modules", ".git", "__pycache__", "dist", ".env",
+                          "venv", ".venv", "build", "coverage", ".next", ".nuxt"}
+DEFAULT_NOMBRE_SALIDA  = "contexto_codigo.txt"
+DEFAULT_NOMBRE_CAMBIOS = "cambios_git.txt"
+DEFAULT_NOMBRE_CO      = "mapa_contexto.txt"
+CARPETA_SALIDA_DEFAULT = ".codigo_completo"
+NOMBRE_CONFIG          = ".codigo_config.json"
 
-# ── Cargar configuración ──────────────────────────────────────────────────────
+# Archivos auto-generados conocidos (nombre exacto)
+ARCHIVOS_AUTOGENERADOS = {
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "poetry.lock", "Pipfile.lock", "composer.lock",
+    "Gemfile.lock", "cargo.lock", "go.sum",
+    "shrinkwrap.json", ".DS_Store", "thumbs.db",
+}
+
+# Patrones de archivos minificados o auto-generados
+PATRONES_AUTOGENERADOS = [
+    re.compile(r"\.min\.(js|css)$"),
+    re.compile(r"\.bundle\.(js|css)$"),
+    re.compile(r"\.chunk\.js$"),
+    re.compile(r"_pb2\.py$"),          # protobuf generado
+    re.compile(r"\.generated\.\w+$"),
+    re.compile(r"migration_\d+"),      # migraciones auto-numeradas
+]
+
+# Archivos raíz que deben aparecer primero
+ARCHIVOS_PRIORITARIOS = {
+    "main", "index", "app", "server", "init",
+    "__init__", "__main__", "manage", "run",
+    "wsgi", "asgi", "settings", "config",
+}
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+def parsear_args(argv: list[str]) -> dict:
+    args = {
+        "carpeta": ".",
+        "init": False,
+        "co": False,
+        "solo_cambios": False,
+        "limite": None,
+        "sin_minimos": False,
+        "verbose": False,
+    }
+
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok in ("--ayuda", "--help", "-h"):
+            print(__doc__)
+            sys.exit(0)
+        elif tok == "--init":
+            args["init"] = True
+        elif tok == "--co":
+            args["co"] = True
+        elif tok == "--solo-cambios":
+            args["solo_cambios"] = True
+        elif tok == "--sin-minimos":
+            args["sin_minimos"] = True
+        elif tok == "--verbose":
+            args["verbose"] = True
+        elif tok == "--limite":
+            i += 1
+            if i >= len(argv):
+                print("[ERROR] --limite requiere un número. Ej: --limite 500")
+                sys.exit(1)
+            try:
+                args["limite"] = int(argv[i])
+            except ValueError:
+                print(f"[ERROR] --limite necesita un entero, recibió: '{argv[i]}'")
+                sys.exit(1)
+        elif not tok.startswith("--"):
+            args["carpeta"] = tok
+        else:
+            print(f"[AVISO] Argumento desconocido: '{tok}'. Usa --ayuda para ver opciones.")
+        i += 1
+
+    return args
+
+# ── Configuración ─────────────────────────────────────────────────────────────
 
 def cargar_config(raiz: Path) -> dict:
-    """
-    Busca .codigo_config.json en la raíz del proyecto.
-    Devuelve un dict con los valores finales (defaults + overrides del archivo).
-    """
     config_path = raiz / NOMBRE_CONFIG
     overrides = {}
 
@@ -61,46 +144,124 @@ def cargar_config(raiz: Path) -> dict:
                 overrides = json.load(f)
             print(f"[CONFIG] Usando configuración desde: {config_path.name}")
         except json.JSONDecodeError as e:
-            print(f"[AVISO] No se pudo leer {NOMBRE_CONFIG} (JSON inválido: {e}). Usando defaults.")
+            print(f"[AVISO] {NOMBRE_CONFIG} tiene JSON inválido ({e}). Usando defaults.")
     else:
         print(f"[CONFIG] No se encontró {NOMBRE_CONFIG}. Usando configuración por defecto.")
 
-    # ── Resolver carpeta de salida ────────────────────────────────────────────
     carpeta_salida_raw = overrides.get("carpeta_salida", None)
     if carpeta_salida_raw:
         carpeta_salida = Path(carpeta_salida_raw)
-        # Si es relativa, se resuelve desde la raíz del proyecto
-        if not carpeta_salida.is_absolute():
-            carpeta_salida = (raiz / carpeta_salida).resolve()
-        else:
-            carpeta_salida = carpeta_salida.resolve()
+        carpeta_salida = (raiz / carpeta_salida).resolve() if not carpeta_salida.is_absolute() \
+                         else carpeta_salida.resolve()
     else:
         carpeta_salida = raiz / CARPETA_SALIDA_DEFAULT
 
     return {
-        "extensiones":           set(overrides.get("extensiones",           DEFAULT_EXTENSIONES)),
-        "ignorar":               set(overrides.get("ignorar",               DEFAULT_IGNORAR)),
-        "nombre_salida":         overrides.get("nombre_salida",             DEFAULT_NOMBRE_SALIDA),
-        "nombre_salida_cambios": overrides.get("nombre_salida_cambios",     DEFAULT_NOMBRE_CAMBIOS),
-        "incluir_solo":          overrides.get("incluir_solo",              None),
+        "descripcion":           overrides.get("descripcion", None),
+        "extensiones":           set(overrides.get("extensiones",        DEFAULT_EXTENSIONES)),
+        "ignorar":               set(overrides.get("ignorar",            DEFAULT_IGNORAR)),
+        "nombre_salida":         overrides.get("nombre_salida",          DEFAULT_NOMBRE_SALIDA),
+        "nombre_salida_cambios": overrides.get("nombre_salida_cambios",  DEFAULT_NOMBRE_CAMBIOS),
+        "nombre_salida_co":      overrides.get("nombre_salida_co",       DEFAULT_NOMBRE_CO),
+        "incluir_solo":          overrides.get("incluir_solo",           None),
         "carpeta_salida":        carpeta_salida,
+        "limite_lineas":         overrides.get("limite_lineas",          None),
+        "omitir_autogenerados":  overrides.get("omitir_autogenerados",   False),
     }
 
-# ── Git: archivos modificados ─────────────────────────────────────────────────
+
+def generar_config_ejemplo(raiz: Path) -> None:
+    """Genera un .codigo_config.json de ejemplo con comentarios explicativos."""
+    destino = raiz / NOMBRE_CONFIG
+
+    if destino.exists():
+        resp = input(f"[AVISO] Ya existe '{NOMBRE_CONFIG}'. ¿Sobreescribir? (s/N): ").strip().lower()
+        if resp != "s":
+            print("[OK] Operación cancelada.")
+            return
+
+    # JSON con comentarios en claves especiales (_comentario_*)
+    ejemplo = {
+        "_comentario_descripcion": "Una línea explicando qué hace tu proyecto. La IA la leerá primero.",
+        "descripcion": "Describe aquí tu proyecto en una o dos oraciones.",
+
+        "_comentario_extensiones": "Extensiones de archivo a incluir.",
+        "extensiones": [".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css"],
+
+        "_comentario_ignorar": "Carpetas o archivos a excluir completamente.",
+        "ignorar": ["node_modules", ".git", "__pycache__", "dist", "venv", "build"],
+
+        "_comentario_incluir_solo": "Si lo defines, solo se incluyen estas carpetas raíz. Quita esta clave para incluir todo.",
+        "incluir_solo": ["src", "app", "api"],
+
+        "_comentario_limite_lineas": "Archivos con más líneas que esto se omiten (útil para reducir tokens). null = sin límite.",
+        "limite_lineas": None,
+
+        "_comentario_omitir_autogenerados": "true omite lockfiles, *.min.js, migraciones auto-numeradas, etc.",
+        "omitir_autogenerados": True,
+
+        "_comentario_carpeta_salida": "Dónde guardar los archivos generados. Ruta relativa al proyecto o absoluta.",
+        "carpeta_salida": ".codigo_completo",
+
+        "_comentario_nombres": "Nombres de los archivos de salida.",
+        "nombre_salida": "contexto_codigo.txt",
+        "nombre_salida_cambios": "cambios_git.txt",
+        "nombre_salida_co": "mapa_contexto.txt",
+    }
+
+    with open(destino, "w", encoding="utf-8") as f:
+        json.dump(ejemplo, f, ensure_ascii=False, indent=2)
+
+    print(f"[OK] Archivo de configuración creado: {destino}")
+    print("     Edítalo según tu proyecto y vuelve a ejecutar el script.")
+
+# ── Detección de auto-generados ───────────────────────────────────────────────
+
+def es_autogenerado(archivo: Path, limite_lineas: int | None = None, verbose: bool = False) -> bool:
+    nombre = archivo.name
+
+    if nombre in ARCHIVOS_AUTOGENERADOS:
+        if verbose:
+            print(f"  [OMITIDO] {nombre} → lockfile/autogenerado conocido")
+        return True
+
+    for patron in PATRONES_AUTOGENERADOS:
+        if patron.search(nombre):
+            if verbose:
+                print(f"  [OMITIDO] {nombre} → coincide patrón autogenerado")
+            return True
+
+    # Detección por línea larga (heurística de minificado)
+    if archivo.suffix in {".js", ".css", ".ts"}:
+        try:
+            primera_linea = archivo.open(encoding="utf-8", errors="replace").readline()
+            if len(primera_linea) > 500:
+                if verbose:
+                    print(f"  [OMITIDO] {nombre} → primera línea de {len(primera_linea)} chars (posible minificado)")
+                return True
+        except Exception:
+            pass
+
+    # Límite de líneas
+    if limite_lineas is not None:
+        try:
+            lineas = sum(1 for _ in archivo.open(encoding="utf-8", errors="replace"))
+            if lineas > limite_lineas:
+                if verbose:
+                    print(f"  [OMITIDO] {nombre} → {lineas} líneas (límite: {limite_lineas})")
+                return True
+        except Exception:
+            pass
+
+    return False
+
+# ── Git ───────────────────────────────────────────────────────────────────────
 
 def obtener_archivos_modificados(raiz: Path) -> list[Path] | None:
-    """
-    Devuelve los archivos que cambiaron desde el último pull (ORIG_HEAD vs HEAD).
-    Si no hay ORIG_HEAD, usa los cambios no commiteados del working tree.
-    Devuelve None si la carpeta no es un repo git.
-    """
-    def run(cmd: list[str]) -> list[str]:
-        result = subprocess.run(cmd, cwd=raiz, capture_output=True, text=True)
-        if result.returncode != 0:
-            return []
-        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    def run(cmd):
+        r = subprocess.run(cmd, cwd=raiz, capture_output=True, text=True)
+        return [l.strip() for l in r.stdout.splitlines() if l.strip()] if r.returncode == 0 else []
 
-    # Verificar que es un repo git
     check = subprocess.run(
         ["git", "rev-parse", "--is-inside-work-tree"],
         cwd=raiz, capture_output=True, text=True
@@ -109,26 +270,84 @@ def obtener_archivos_modificados(raiz: Path) -> list[Path] | None:
         print("[GIT] La carpeta no es un repositorio git. Se omite el archivo de cambios.")
         return None
 
-    # Intentar ORIG_HEAD (existe después de un pull/merge/rebase)
     orig_head = run(["git", "rev-parse", "--verify", "ORIG_HEAD"])
     if orig_head:
         archivos = run(["git", "diff", "--name-only", "--diff-filter=ACMR", "ORIG_HEAD", "HEAD"])
         origen   = "ORIG_HEAD → HEAD (último pull)"
     else:
-        # Fallback: cambios staged + unstaged sin commitear
         staged   = run(["git", "diff", "--name-only", "--diff-filter=ACMR", "--cached"])
         unstaged = run(["git", "diff", "--name-only", "--diff-filter=ACMR"])
-        archivos = list(dict.fromkeys(staged + unstaged))  # deduplicar preservando orden
+        archivos = list(dict.fromkeys(staged + unstaged))
         origen   = "working tree (cambios sin commitear)"
 
     if not archivos:
         print("[GIT] No se detectaron archivos modificados.")
         return []
 
-    print(f"[GIT] {len(archivos)} archivo(s) modificado(s) detectados ({origen})")
+    print(f"[GIT] {len(archivos)} archivo(s) modificado(s) ({origen})")
     return [raiz / p for p in archivos if (raiz / p).exists()]
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def obtener_ultimos_commits(raiz: Path, n: int = 5) -> list[str]:
+    r = subprocess.run(
+        ["git", "log", "--oneline", f"-{n}"],
+        cwd=raiz, capture_output=True, text=True
+    )
+    if r.returncode != 0:
+        return []
+    return [l.strip() for l in r.stdout.splitlines() if l.strip()]
+
+# ── Ordenación de archivos ────────────────────────────────────────────────────
+
+def _prioridad(archivo: Path) -> tuple:
+    """
+    Ordena por: (profundidad, no-prioritario, nombre).
+    Archivos raíz con nombres clave van primero.
+    """
+    partes = archivo.parts
+    profundidad = len(partes)
+    stem_lower  = archivo.stem.lower().lstrip("_")
+    es_prioritario = 0 if stem_lower in ARCHIVOS_PRIORITARIOS else 1
+    return (profundidad, es_prioritario, archivo.name.lower())
+
+
+def ordenar_archivos(archivos: list[Path]) -> list[Path]:
+    return sorted(archivos, key=_prioridad)
+
+# ── Análisis de importaciones ─────────────────────────────────────────────────
+
+def extraer_importaciones(archivo: Path) -> list[str]:
+    """Extrae módulos importados de forma básica (Python, JS/TS)."""
+    importaciones = []
+    try:
+        texto = archivo.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return importaciones
+
+    if archivo.suffix == ".py":
+        try:
+            tree = ast.parse(texto)
+            for nodo in ast.walk(tree):
+                if isinstance(nodo, ast.Import):
+                    for alias in nodo.names:
+                        importaciones.append(alias.name.split(".")[0])
+                elif isinstance(nodo, ast.ImportFrom):
+                    if nodo.module:
+                        importaciones.append(nodo.module.split(".")[0])
+        except SyntaxError:
+            pass
+
+    elif archivo.suffix in {".js", ".ts", ".jsx", ".tsx"}:
+        patron = re.compile(
+            r"""(?:import|require)\s*(?:.*?from\s*)?['"](\.{1,2}/[^'"]+|[^'"./][^'"]*)['"']""",
+            re.MULTILINE,
+        )
+        for m in patron.finditer(texto):
+            importaciones.append(m.group(1))
+
+    return list(dict.fromkeys(importaciones))  # deduplicar
+
+# ── Helpers generales ─────────────────────────────────────────────────────────
 
 def debe_ignorar(path: Path, ignorar: set) -> bool:
     return any(parte in ignorar for parte in path.parts)
@@ -139,27 +358,50 @@ def en_carpetas_permitidas(path: Path, raiz: Path, incluir_solo: list | None) ->
         return True
     try:
         relativo = path.relative_to(raiz)
-        return any(relativo.parts[0] == carpeta for carpeta in incluir_solo)
+        return any(relativo.parts[0] == c for c in incluir_solo)
     except ValueError:
         return False
 
 
-def recolectar_archivos(raiz: Path, config: dict) -> list[Path]:
+def recolectar_archivos(raiz: Path, config: dict,
+                         omitir_autogenerados: bool = False,
+                         limite_lineas: int | None = None,
+                         verbose: bool = False) -> list[Path]:
     archivos = []
-    for archivo in sorted(raiz.rglob("*")):
+    for archivo in raiz.rglob("*"):
         if not archivo.is_file():
             continue
-        if debe_ignorar(archivo.relative_to(raiz), config["ignorar"]):
+
+        try:
+            rel = archivo.relative_to(raiz)
+        except ValueError:
+            continue
+
+        if debe_ignorar(rel, config["ignorar"]):
             continue
         if not en_carpetas_permitidas(archivo, raiz, config["incluir_solo"]):
             continue
-        if archivo.suffix in config["extensiones"]:
-            archivos.append(archivo)
-    return archivos
+        if archivo.suffix not in config["extensiones"]:
+            continue
+
+        limite = limite_lineas if limite_lineas is not None else config.get("limite_lineas")
+        omitir = omitir_autogenerados or config.get("omitir_autogenerados", False)
+
+        if omitir and es_autogenerado(archivo, limite, verbose):
+            continue
+        elif limite and not omitir:
+            if es_autogenerado(archivo, limite, verbose):
+                continue
+
+        archivos.append(archivo)
+
+    return ordenar_archivos(archivos)
 
 
-def filtrar_por_config(archivos: list[Path], raiz: Path, config: dict) -> list[Path]:
-    """Filtra una lista de paths aplicando las mismas reglas de extensión/ignorar/incluir_solo."""
+def filtrar_por_config(archivos: list[Path], raiz: Path, config: dict,
+                        omitir_autogenerados: bool = False,
+                        limite_lineas: int | None = None,
+                        verbose: bool = False) -> list[Path]:
     resultado = []
     for archivo in archivos:
         if not archivo.is_file():
@@ -172,14 +414,19 @@ def filtrar_por_config(archivos: list[Path], raiz: Path, config: dict) -> list[P
             continue
         if not en_carpetas_permitidas(archivo, raiz, config["incluir_solo"]):
             continue
-        if archivo.suffix in config["extensiones"]:
-            resultado.append(archivo)
-    return resultado
+        if archivo.suffix not in config["extensiones"]:
+            continue
+        limite = limite_lineas if limite_lineas is not None else config.get("limite_lineas")
+        omitir = omitir_autogenerados or config.get("omitir_autogenerados", False)
+        if omitir and es_autogenerado(archivo, limite, verbose):
+            continue
+        resultado.append(archivo)
+    return ordenar_archivos(resultado)
 
 
 def construir_arbol(archivos: list[Path], raiz: Path) -> str:
     lineas = [f"{raiz.resolve().name}/"]
-    directorios_vistos = set()
+    directorios_vistos: set = set()
 
     for archivo in archivos:
         relativo = archivo.relative_to(raiz)
@@ -195,40 +442,40 @@ def construir_arbol(archivos: list[Path], raiz: Path) -> str:
 
     return "\n".join(lineas)
 
+# ── Escritura de archivos de contexto ─────────────────────────────────────────
 
-def escribir_archivo(
-    salida_path: Path,
-    archivos: list[Path],
-    raiz: Path,
-    config: dict,
-    titulo: str,
-    nota_extra: str = "",
-) -> None:
-    """Escribe un archivo de contexto con encabezado, árbol y contenido."""
-    separador = "=" * 72
+def escribir_encabezado(f, config: dict, raiz: Path, titulo: str,
+                         n_archivos: int, nota_extra: str = "") -> None:
+    sep = "=" * 72
+    f.write(f"# Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    f.write(f"# {titulo}\n")
+    f.write(f"# Carpeta origen: {raiz}\n")
+
+    if config.get("descripcion"):
+        f.write(f"\n# DESCRIPCIÓN DEL PROYECTO\n# {config['descripcion']}\n")
+
+    f.write(f"\n# Extensiones incluidas: {', '.join(sorted(config['extensiones']))}\n")
+    f.write(f"# Ignorados: {', '.join(sorted(config['ignorar']))}\n")
+    if config["incluir_solo"]:
+        f.write(f"# Carpetas incluidas: {', '.join(config['incluir_solo'])}\n")
+    if nota_extra:
+        f.write(f"# {nota_extra}\n")
+    f.write(f"# Total de archivos: {n_archivos}\n")
+    f.write(f"\n# {sep}\n\n")
+
+
+def escribir_archivo(salida_path: Path, archivos: list[Path], raiz: Path,
+                      config: dict, titulo: str, nota_extra: str = "") -> None:
+    sep = "=" * 72
 
     with open(salida_path, "w", encoding="utf-8") as f:
-        f.write(f"# Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"# {titulo}\n")
-        f.write(f"# Carpeta origen: {raiz}\n")
-        f.write(f"# Extensiones incluidas: {', '.join(sorted(config['extensiones']))}\n")
-        f.write(f"# Ignorados: {', '.join(sorted(config['ignorar']))}\n")
-        if config["incluir_solo"]:
-            f.write(f"# Carpetas incluidas: {', '.join(config['incluir_solo'])}\n")
-        if nota_extra:
-            f.write(f"# {nota_extra}\n")
-        f.write(f"# Total de archivos: {len(archivos)}\n")
-        f.write("\n")
+        escribir_encabezado(f, config, raiz, titulo, len(archivos), nota_extra)
 
-        f.write(f"# {separador}\n")
-        f.write("# ÁRBOL DE ARCHIVOS\n")
-        f.write(f"# {separador}\n\n")
+        f.write(f"# ÁRBOL DE ARCHIVOS\n# {sep}\n\n")
         f.write(construir_arbol(archivos, raiz))
         f.write("\n\n")
 
-        f.write(f"# {separador}\n")
-        f.write("# CONTENIDO\n")
-        f.write(f"# {separador}\n")
+        f.write(f"# {sep}\n# CONTENIDO\n# {sep}\n")
 
         for archivo in archivos:
             relativo = archivo.relative_to(raiz)
@@ -239,19 +486,115 @@ def escribir_archivo(
                 if not contenido.endswith("\n"):
                     f.write("\n")
             except Exception as e:
-                f.write(f"# [No se pudo leer el archivo: {e}]\n")
+                f.write(f"# [No se pudo leer: {e}]\n")
+
+# ── Modo --co (Context Only) ──────────────────────────────────────────────────
+
+def escribir_context_only(salida_path: Path, archivos: list[Path],
+                           raiz: Path, config: dict, commits: list[str]) -> None:
+    sep = "=" * 72
+
+    with open(salida_path, "w", encoding="utf-8") as f:
+        escribir_encabezado(f, config, raiz, "MAPA DE CONTEXTO (sin código)", len(archivos))
+
+        # Últimos commits
+        if commits:
+            f.write(f"# ÚLTIMOS COMMITS\n# {sep}\n")
+            for c in commits:
+                f.write(f"#   {c}\n")
+            f.write("\n")
+
+        # Árbol
+        f.write(f"# ÁRBOL DE ARCHIVOS\n# {sep}\n\n")
+        f.write(construir_arbol(archivos, raiz))
+        f.write("\n\n")
+
+        # Ficha por archivo
+        f.write(f"# {sep}\n# FICHA POR ARCHIVO\n# {sep}\n\n")
+
+        for archivo in archivos:
+            relativo = archivo.relative_to(raiz)
+            importaciones = extraer_importaciones(archivo)
+
+            try:
+                lineas = sum(1 for _ in archivo.open(encoding="utf-8", errors="replace"))
+            except Exception:
+                lineas = "?"
+
+            f.write(f"## {relativo}\n")
+            f.write(f"   Líneas   : {lineas}\n")
+            f.write(f"   Extensión: {archivo.suffix}\n")
+
+            if importaciones:
+                f.write(f"   Importa  : {', '.join(importaciones[:15])}")
+                if len(importaciones) > 15:
+                    f.write(f" ... (+{len(importaciones)-15} más)")
+                f.write("\n")
+            else:
+                f.write("   Importa  : (ninguna detectada)\n")
+
+            f.write("\n")
+
+        # Grafo de dependencias entre archivos del proyecto
+        f.write(f"# {sep}\n# GRAFO DE DEPENDENCIAS INTERNAS\n# {sep}\n\n")
+        f.write("# (Muestra qué archivos del proyecto se importan entre sí)\n\n")
+
+        stems = {a.stem: str(a.relative_to(raiz)) for a in archivos}
+        tiene_deps = False
+
+        for archivo in archivos:
+            importaciones = extraer_importaciones(archivo)
+            deps_internas = []
+            for imp in importaciones:
+                # Resolver importaciones relativas (./foo, ../bar)
+                if imp.startswith("."):
+                    base  = (archivo.parent / imp).resolve()
+                    clave = base.stem
+                else:
+                    clave = imp.split("/")[-1].split(".")[0]
+
+                if clave in stems:
+                    deps_internas.append(stems[clave])
+
+            if deps_internas:
+                tiene_deps = True
+                relativo = archivo.relative_to(raiz)
+                f.write(f"  {relativo}\n")
+                for d in deps_internas:
+                    f.write(f"    └─ {d}\n")
+                f.write("\n")
+
+        if not tiene_deps:
+            f.write("  (No se detectaron dependencias internas entre los archivos incluidos)\n\n")
+
+        # Instrucciones para el usuario
+        f.write(f"# {sep}\n# INSTRUCCIONES PARA EL USUARIO\n# {sep}\n\n")
+        f.write("# Este archivo NO contiene código fuente.\n")
+        f.write("# Úsalo para decidir qué archivos pasarle a la IA.\n")
+        f.write("# Luego ejecuta el script indicando solo esas carpetas en 'incluir_solo'\n")
+        f.write("# o usa --solo-cambios si trabajas con git.\n\n")
 
 # ── Función principal ─────────────────────────────────────────────────────────
 
-def unificar(carpeta_origen: str = ".") -> None:
-    raiz = Path(carpeta_origen).resolve()
+def unificar(args: dict) -> None:
+    raiz = Path(args["carpeta"]).resolve()
 
     if not raiz.exists():
         print(f"[ERROR] La carpeta '{raiz}' no existe.")
         sys.exit(1)
 
+    if args["init"]:
+        generar_config_ejemplo(raiz)
+        return
+
     config     = cargar_config(raiz)
     salida_dir = config["carpeta_salida"]
+
+    # Los args de CLI sobreescriben la config si se pasan explícitamente
+    if args["limite"] is not None:
+        config["limite_lineas"] = args["limite"]
+    if args["sin_minimos"]:
+        config["omitir_autogenerados"] = True
 
     try:
         salida_dir.mkdir(parents=True, exist_ok=True)
@@ -261,54 +604,78 @@ def unificar(carpeta_origen: str = ".") -> None:
 
     print(f"[CONFIG] Carpeta de salida: {salida_dir}")
 
-    # ── Archivo 1: contexto completo ──────────────────────────────────────────
-    todos = recolectar_archivos(raiz, config)
+    todos = recolectar_archivos(
+        raiz, config,
+        omitir_autogenerados=config.get("omitir_autogenerados", False),
+        limite_lineas=config.get("limite_lineas"),
+        verbose=args["verbose"],
+    )
 
     if not todos:
         print("[AVISO] No se encontraron archivos con las extensiones configuradas.")
         return
 
-    salida_completa = salida_dir / config["nombre_salida"]
-    escribir_archivo(
-        salida_path=salida_completa,
-        archivos=todos,
-        raiz=raiz,
-        config=config,
-        titulo="CONTEXTO COMPLETO DEL PROYECTO",
-    )
-    print(f"[OK] Contexto completo → {salida_completa}  ({len(todos)} archivos)")
+    # ── Modo --co ─────────────────────────────────────────────────────────────
+    if args["co"]:
+        commits    = obtener_ultimos_commits(raiz)
+        salida_co  = salida_dir / config["nombre_salida_co"]
+        escribir_context_only(salida_co, todos, raiz, config, commits)
+        print(f"[OK] Mapa de contexto  → {salida_co}  ({len(todos)} archivos, sin código)")
+        return
 
-    # ── Archivo 2: solo cambios git ───────────────────────────────────────────
+    # ── Contexto completo ─────────────────────────────────────────────────────
+    if not args["solo_cambios"]:
+        salida_completa = salida_dir / config["nombre_salida"]
+        escribir_archivo(
+            salida_path=salida_completa,
+            archivos=todos,
+            raiz=raiz,
+            config=config,
+            titulo="CONTEXTO COMPLETO DEL PROYECTO",
+        )
+        print(f"[OK] Contexto completo → {salida_completa}  ({len(todos)} archivos)")
+
+    # ── Cambios git ───────────────────────────────────────────────────────────
     modificados_raw = obtener_archivos_modificados(raiz)
 
     if modificados_raw is None:
-        # No es repo git
         return
 
     if not modificados_raw:
         print("[OK] Sin cambios detectados, no se genera archivo de cambios.")
         return
 
-    modificados = filtrar_por_config(modificados_raw, raiz, config)
+    modificados = filtrar_por_config(
+        modificados_raw, raiz, config,
+        omitir_autogenerados=config.get("omitir_autogenerados", False),
+        limite_lineas=config.get("limite_lineas"),
+        verbose=args["verbose"],
+    )
 
     if not modificados:
         print("[OK] Los archivos modificados no coinciden con las extensiones/carpetas configuradas.")
         return
 
+    commits       = obtener_ultimos_commits(raiz)
+    lista_nombres = ", ".join(str(m.relative_to(raiz)) for m in modificados)
+    nota          = f"Archivos modificados: {lista_nombres}"
+
+    if commits:
+        nota += f" | Commits recientes: {' / '.join(commits[:3])}"
+
     salida_cambios = salida_dir / config["nombre_salida_cambios"]
-    lista_nombres  = ", ".join(str(m.relative_to(raiz)) for m in modificados)
     escribir_archivo(
         salida_path=salida_cambios,
         archivos=modificados,
         raiz=raiz,
         config=config,
         titulo="ARCHIVOS MODIFICADOS DESDE EL ÚLTIMO PULL",
-        nota_extra=f"Archivos modificados: {lista_nombres}",
+        nota_extra=nota,
     )
     print(f"[OK] Cambios git       → {salida_cambios}  ({len(modificados)} archivos)")
 
 # ── Entrada ───────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    origen = sys.argv[1] if len(sys.argv) > 1 else "."
-    unificar(origen)
+    args = parsear_args(sys.argv[1:])
+    unificar(args)
