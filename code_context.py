@@ -16,13 +16,19 @@ USO:
   python code_context.py [carpeta] [opciones]
 
 OPCIONES:
-  --init          Genera .codigo_config.json de ejemplo en la carpeta indicada
-  --co            Solo contexto: árbol + dependencias + propósito, sin código
-  --solo-cambios  Solo genera el archivo de cambios git (no el contexto completo)
-  --limite N      Omite archivos con más de N líneas (default: sin límite)
-  --sin-minimos   Omite archivos auto-generados (minificados, lockfiles, etc.)
-  --verbose       Muestra qué archivos se omiten y por qué
-  --ayuda         Muestra esta ayuda
+  --init               Genera .codigo_config.json de ejemplo en la carpeta indicada
+  --co                 Solo contexto: árbol + dependencias + propósito, sin código
+  --solo-cambios       Solo genera el archivo de cambios git (no el contexto completo)
+  --limite N           Omite archivos con más de N líneas (default: sin límite)
+  --sin-minimos        Omite archivos auto-generados (minificados, lockfiles, etc.)
+  --verbose            Muestra qué archivos se omiten y por qué
+  --objetivo "texto"   Define el objetivo de la sesión. Se incluye en el encabezado
+                       de todos los archivos generados junto con instrucciones para
+                       que la IA responda con el comando listo para ejecutar.
+  --archivos f1 f2 ... Incluye solo los archivos indicados (rutas relativas a la
+                       carpeta del proyecto). Pensado para ejecutar el comando que
+                       te devuelve la IA tras recibir un archivo con --objetivo.
+  --ayuda              Muestra esta ayuda
 
 EJEMPLO .codigo_config.json:
 {
@@ -96,6 +102,8 @@ def parsear_args(argv: list[str]) -> dict:
         "limite": None,
         "sin_minimos": False,
         "verbose": False,
+        "objetivo": None,
+        "archivos": None,   # list[str] | None
     }
 
     i = 0
@@ -124,6 +132,24 @@ def parsear_args(argv: list[str]) -> dict:
             except ValueError:
                 print(f"[ERROR] --limite necesita un entero, recibió: '{argv[i]}'")
                 sys.exit(1)
+        elif tok == "--objetivo":
+            i += 1
+            if i >= len(argv):
+                print("[ERROR] --objetivo requiere un texto. Ej: --objetivo \"Agregar autenticación JWT\"")
+                sys.exit(1)
+            args["objetivo"] = argv[i]
+        elif tok == "--archivos":
+            # Consume todos los tokens siguientes que no sean flags (--)
+            i += 1
+            archivos_lista = []
+            while i < len(argv) and not argv[i].startswith("--"):
+                archivos_lista.append(argv[i])
+                i += 1
+            if not archivos_lista:
+                print("[ERROR] --archivos requiere al menos un archivo. Ej: --archivos src/main.py src/utils.py")
+                sys.exit(1)
+            args["archivos"] = archivos_lista
+            continue  # i ya fue incrementado en el while interno
         elif not tok.startswith("--"):
             args["carpeta"] = tok
         else:
@@ -167,6 +193,8 @@ def cargar_config(raiz: Path) -> dict:
         "carpeta_salida":        carpeta_salida,
         "limite_lineas":         overrides.get("limite_lineas",          None),
         "omitir_autogenerados":  overrides.get("omitir_autogenerados",   False),
+        "objetivo":              None,        # se inyecta desde CLI en unificar()
+        "archivos_forzados":     None,        # se inyecta desde CLI en unificar()
     }
 
 
@@ -454,7 +482,33 @@ def escribir_encabezado(f, config: dict, raiz: Path, titulo: str,
     if config.get("descripcion"):
         f.write(f"\n# DESCRIPCIÓN DEL PROYECTO\n# {config['descripcion']}\n")
 
-    f.write(f"\n# Extensiones incluidas: {', '.join(sorted(config['extensiones']))}\n")
+    # ── Objetivo de la sesión ─────────────────────────────────────────────────
+    if config.get("objetivo"):
+        f.write(f"\n# {sep}\n")
+        f.write(f"# 🎯 OBJETIVO DE ESTA SESIÓN\n")
+        f.write(f"# {sep}\n")
+        f.write(f"#\n")
+        f.write(f"#   {config['objetivo']}\n")
+        f.write(f"#\n")
+        f.write(f"# {sep}\n")
+        f.write(f"# INSTRUCCIONES PARA LA IA\n")
+        f.write(f"# {sep}\n")
+        f.write(f"#\n")
+        f.write(f"# Antes de responder, indicá qué archivos adicionales necesitás\n")
+        f.write(f"# ver para cumplir el objetivo. Para cada archivo explicá por qué\n")
+        f.write(f"# lo necesitás. Luego incluí una sección así (lista para copiar\n")
+        f.write(f"# y pegar directamente en la terminal):\n")
+        f.write(f"#\n")
+        f.write(f"#   COMANDO PARA GENERAR EL CONTEXTO SOLICITADO:\n")
+        f.write(f"#   contexto {raiz} --objetivo \"{config['objetivo']}\" --archivos archivo1 archivo2 ...\n")
+        f.write(f"#\n")
+        f.write(f"# Usá rutas relativas a la raíz del proyecto.\n")
+        f.write(f"# Si ya tenés suficiente contexto para cumplir el objetivo,\n")
+        f.write(f"# indicalo y procedé directamente con tu respuesta.\n")
+        f.write(f"#\n")
+        f.write(f"# {sep}\n\n")
+
+    f.write(f"# Extensiones incluidas: {', '.join(sorted(config['extensiones']))}\n")
     f.write(f"# Ignorados: {', '.join(sorted(config['ignorar']))}\n")
     if config["incluir_solo"]:
         f.write(f"# Carpetas incluidas: {', '.join(config['incluir_solo'])}\n")
@@ -590,11 +644,13 @@ def unificar(args: dict) -> None:
     config     = cargar_config(raiz)
     salida_dir = config["carpeta_salida"]
 
-    # Los args de CLI sobreescriben la config si se pasan explícitamente
+    # Inyectar valores CLI en config
     if args["limite"] is not None:
         config["limite_lineas"] = args["limite"]
     if args["sin_minimos"]:
         config["omitir_autogenerados"] = True
+    if args["objetivo"]:
+        config["objetivo"] = args["objetivo"]
 
     try:
         salida_dir.mkdir(parents=True, exist_ok=True)
@@ -603,6 +659,40 @@ def unificar(args: dict) -> None:
         sys.exit(1)
 
     print(f"[CONFIG] Carpeta de salida: {salida_dir}")
+
+    # ── Modo --archivos: contexto de archivos específicos pedidos por la IA ────
+    if args["archivos"] is not None:
+        archivos_resueltos = []
+        for ruta_str in args["archivos"]:
+            candidato = (raiz / ruta_str).resolve()
+            if not candidato.exists():
+                print(f"[AVISO] Archivo no encontrado, se omite: {ruta_str}")
+                continue
+            if not candidato.is_file():
+                print(f"[AVISO] No es un archivo, se omite: {ruta_str}")
+                continue
+            archivos_resueltos.append(candidato)
+
+        if not archivos_resueltos:
+            print("[ERROR] Ninguno de los archivos indicados con --archivos existe.")
+            sys.exit(1)
+
+        archivos_resueltos = ordenar_archivos(archivos_resueltos)
+        nombre_salida = "contexto_solicitado.txt"
+        salida_path   = salida_dir / nombre_salida
+
+        objetivo_texto = config.get("objetivo") or "no especificado"
+        titulo = f"CONTEXTO SOLICITADO POR LA IA  |  Objetivo: {objetivo_texto}"
+
+        escribir_archivo(
+            salida_path=salida_path,
+            archivos=archivos_resueltos,
+            raiz=raiz,
+            config=config,
+            titulo=titulo,
+        )
+        print(f"[OK] Contexto solicitado → {salida_path}  ({len(archivos_resueltos)} archivos)")
+        return
 
     todos = recolectar_archivos(
         raiz, config,

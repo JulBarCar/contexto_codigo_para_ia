@@ -12,11 +12,12 @@ Pensado para:
 
 ## 🚀 ¿Qué genera?
 
-| Archivo               | Cuándo se genera      | Contenido                                      |
-| --------------------- | --------------------- | ---------------------------------------------- |
-| `contexto_codigo.txt` | Siempre (modo normal) | Todo el código del proyecto                    |
-| `cambios_git.txt`     | Si es repo git        | Solo archivos modificados desde el último pull |
-| `mapa_contexto.txt`   | Con `--co`            | Árbol + dependencias + fichas, **sin código**  |
+| Archivo                   | Cuándo se genera           | Contenido                                              |
+| ------------------------- | -------------------------- | ------------------------------------------------------ |
+| `contexto_codigo.txt`     | Siempre (modo normal)      | Todo el código del proyecto                            |
+| `cambios_git.txt`         | Si es repo git             | Solo archivos modificados desde el último pull         |
+| `mapa_contexto.txt`       | Con `--co`                 | Árbol + dependencias + fichas, **sin código**          |
+| `contexto_solicitado.txt` | Con `--archivos`           | Solo los archivos que pidió la IA                      |
 
 ---
 
@@ -156,15 +157,85 @@ contexto . --verbose            # muestra qué archivos se omiten y por qué
 
 ## 📋 Referencia de argumentos
 
-| Argumento        | Descripción                                                    |
-| ---------------- | -------------------------------------------------------------- |
-| `--init`         | Genera un `.codigo_config.json` de ejemplo con comentarios     |
-| `--co`           | Modo "context only": árbol + dependencias + fichas, sin código |
-| `--solo-cambios` | Solo genera el archivo de cambios git                          |
-| `--limite N`     | Omite archivos con más de N líneas                             |
-| `--sin-minimos`  | Omite lockfiles, `.min.js`, y otros auto-generados             |
-| `--verbose`      | Muestra detalle de archivos omitidos                           |
-| `--ayuda`        | Muestra ayuda                                                  |
+| Argumento              | Descripción                                                                 |
+| ---------------------- | --------------------------------------------------------------------------- |
+| `--init`               | Genera un `.codigo_config.json` de ejemplo con comentarios                  |
+| `--co`                 | Modo "context only": árbol + dependencias + fichas, sin código              |
+| `--solo-cambios`       | Solo genera el archivo de cambios git                                       |
+| `--limite N`           | Omite archivos con más de N líneas                                          |
+| `--sin-minimos`        | Omite lockfiles, `.min.js`, y otros auto-generados                          |
+| `--verbose`            | Muestra detalle de archivos omitidos                                        |
+| `--objetivo "texto"`   | Define el objetivo de la sesión. Se escribe en el encabezado de todos los archivos generados e instruye a la IA a responder con un comando listo para pegar |
+| `--archivos f1 f2 ...` | Incluye solo los archivos indicados (rutas relativas). Pensado para ejecutar el comando que devuelve la IA tras recibir un archivo con `--objetivo`         |
+| `--ayuda`              | Muestra ayuda                                                               |
+
+---
+
+## 🎯 Workflow con `--objetivo` y `--archivos`
+
+Este es el workflow principal para trabajar con la IA de forma iterativa y eficiente.
+
+### Paso 1 — Generás el contexto con tu objetivo
+
+```bash
+contexto . --objetivo "Agregar autenticación JWT con refresh tokens"
+```
+
+El archivo generado incluye en su encabezado:
+- Tu objetivo claramente enunciado
+- Instrucciones explícitas para que la IA te responda con un comando listo para copiar
+
+### Paso 2 — Pasás el archivo a la IA
+
+La IA recibirá el contexto completo del proyecto junto con el objetivo. En su respuesta:
+- Te dirá qué archivos necesita ver y por qué
+- Te dará un comando listo para pegar, como este:
+
+```
+COMANDO PARA GENERAR EL CONTEXTO SOLICITADO:
+contexto . --objetivo "Agregar autenticación JWT con refresh tokens" --archivos src/auth.py src/models/user.py src/routes/api.py
+```
+
+### Paso 3 — Ejecutás el comando que te dio la IA
+
+Copiás y pegás el comando en tu terminal. Esto genera `contexto_solicitado.txt` con solo los archivos que la IA pidió.
+
+### Paso 4 — Pasás ese archivo a la IA
+
+Ahora la IA tiene exactamente el contexto que necesita para resolver tu objetivo. Sin tokens desperdiciados.
+
+---
+
+### `--objetivo "texto"`
+
+Define el objetivo de la sesión de trabajo con la IA.
+
+```bash
+contexto . --objetivo "Refactorizar el módulo de pagos para soportar múltiples proveedores"
+```
+
+Se puede combinar con cualquier otro modo:
+
+```bash
+contexto . --co --objetivo "Entender la estructura antes de agregar tests"
+contexto . --solo-cambios --objetivo "Revisar los cambios del último PR"
+```
+
+### `--archivos archivo1 archivo2 ...`
+
+Genera un contexto con solo los archivos especificados, sin aplicar filtros de configuración. Acepta rutas relativas a la raíz del proyecto.
+
+```bash
+contexto . --archivos src/auth.py src/models/user.py config/settings.py
+```
+
+Si se combina con `--objetivo`, el archivo generado se titula indicando el objetivo:
+
+```bash
+contexto . --objetivo "Agregar JWT" --archivos src/auth.py src/models/user.py
+```
+
+El archivo de salida se llama siempre `contexto_solicitado.txt` para que sea fácil de identificar.
 
 ---
 
