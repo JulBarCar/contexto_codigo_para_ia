@@ -7,17 +7,21 @@ Pensado para:
 - Pasar tu código a una IA de forma ordenada y eficiente
 - Explorar la estructura de un proyecto antes de decidir qué compartir
 - Revisar solo los archivos que cambiaron desde el último pull
+- Generar contexto optimizado para IA con un objetivo específico
 
 ---
 
 ## 🚀 ¿Qué genera?
 
-| Archivo                   | Cuándo se genera           | Contenido                                              |
-| ------------------------- | -------------------------- | ------------------------------------------------------ |
-| `contexto_codigo.txt`     | Siempre (modo normal)      | Todo el código del proyecto                            |
-| `cambios_git.txt`         | Si es repo git             | Solo archivos modificados desde el último pull         |
-| `mapa_contexto.txt`       | Con `--co`                 | Árbol + dependencias + fichas, **sin código**          |
-| `contexto_solicitado.txt` | Con `--archivos`           | Solo los archivos que pidió la IA                      |
+| Archivo                        | Cuándo se genera                    | Contenido                                           |
+| ------------------------------ | ----------------------------------- | --------------------------------------------------- |
+| `contexto_codigo.txt`          | Siempre (modo normal)               | Todo el código del proyecto                         |
+| `cambios_git.txt`              | Si es repo git                      | Solo archivos modificados desde el último pull      |
+| `mapa_contexto.txt`            | Con `--co`                          | Árbol + dependencias + fichas, **sin código**       |
+| `ia_[objetivo]_contexto.txt`   | Con `--objetivo`                    | Contexto completo optimizado para IA, formato XML   |
+| `ia_[objetivo]_mapa.txt`       | Con `--co` + `--objetivo`           | Mapa estructural (sin código) optimizado para IA    |
+| `ia_[objetivo]_solicitado.txt` | Con `--objetivo` + `--archivos`     | Archivos específicos pedidos por la IA, formato XML |
+| `contexto_solicitado.txt`      | Con `--archivos` (sin `--objetivo`) | Solo los archivos indicados, formato estándar       |
 
 ---
 
@@ -44,11 +48,7 @@ code-context/
 
 ### 1. Crear los scripts de atajo
 
-Si no tenés los archivos `.bat` o `.sh`, creálos a mano:
-
 #### 🪟 Windows — `contexto.bat`
-
-Creá un archivo llamado `contexto.bat` en la misma carpeta que `code_context.py` con este contenido:
 
 ```bat
 @echo off
@@ -57,31 +57,18 @@ python "%~dp0code_context.py" %*
 
 #### 🐧 Linux / Mac — `contexto.sh`
 
-Creá un archivo llamado `contexto.sh`:
-
 ```bash
 #!/bin/bash
 python3 "$(dirname "$0")/code_context.py" "$@"
 ```
 
-Luego dále permisos de ejecución:
-
 ```bash
 chmod +x contexto.sh
-```
-
-Opcionalmente, renombralo para usarlo sin extensión:
-
-```bash
-mv contexto.sh contexto
-chmod +x contexto
 ```
 
 ---
 
 ### 2. Agregar al PATH (opcional pero recomendado)
-
-Hacerlo te permite escribir `contexto` desde cualquier carpeta.
 
 #### 🪟 Windows
 
@@ -94,38 +81,8 @@ Hacerlo te permite escribir `contexto` desde cualquier carpeta.
 
 ```bash
 nano ~/.bashrc   # o ~/.zshrc si usás zsh
-```
-
-Agregá:
-
-```bash
 export PATH="$PATH:/home/tu-usuario/tools/code-context"
-```
-
-Aplicá los cambios:
-
-```bash
 source ~/.bashrc
-```
-
-#### 🐧 Alternativa: alias
-
-```bash
-alias contexto='python3 /ruta/a/code_context.py'
-```
-
-#### 🪟 Alternativa: perfil de PowerShell
-
-```powershell
-notepad $PROFILE
-```
-
-Agregá:
-
-```powershell
-function contexto {
-    python "C:\ruta\a\code_context.py" $args
-}
 ```
 
 ---
@@ -146,28 +103,41 @@ Si no se indica carpeta, usa la carpeta actual (`.`).
 contexto                        # carpeta actual, modo completo
 contexto ../mi-backend          # carpeta específica
 contexto . --co                 # mapa de contexto sin código
-contexto . --init               # genera config de ejemplo
+contexto . --init               # genera config con comentarios
+contexto . --init --limpio      # genera config mínimo, sin comentarios
 contexto . --solo-cambios       # solo archivos modificados en git
 contexto . --sin-minimos        # omite lockfiles y archivos auto-generados
 contexto . --limite 300         # omite archivos de más de 300 líneas
 contexto . --verbose            # muestra qué archivos se omiten y por qué
+contexto . --preview            # muestra qué se incluiría, sin generar nada
+contexto . --stats --modelo claude   # estimación de tokens en consola
+contexto . --ignorar-extra tmp logs  # ignorar carpetas extra sin tocar config
 ```
 
 ---
 
 ## 📋 Referencia de argumentos
 
-| Argumento              | Descripción                                                                 |
-| ---------------------- | --------------------------------------------------------------------------- |
-| `--init`               | Genera un `.codigo_config.json` de ejemplo con comentarios                  |
-| `--co`                 | Modo "context only": árbol + dependencias + fichas, sin código              |
-| `--solo-cambios`       | Solo genera el archivo de cambios git                                       |
-| `--limite N`           | Omite archivos con más de N líneas                                          |
-| `--sin-minimos`        | Omite lockfiles, `.min.js`, y otros auto-generados                          |
-| `--verbose`            | Muestra detalle de archivos omitidos                                        |
-| `--objetivo "texto"`   | Define el objetivo de la sesión. Se escribe en el encabezado de todos los archivos generados e instruye a la IA a responder con un comando listo para pegar |
-| `--archivos f1 f2 ...` | Incluye solo los archivos indicados (rutas relativas). Pensado para ejecutar el comando que devuelve la IA tras recibir un archivo con `--objetivo`         |
-| `--ayuda`              | Muestra ayuda                                                               |
+| Argumento                   | Descripción                                                                             |
+| --------------------------- | --------------------------------------------------------------------------------------- |
+| `--init`                    | Genera un `.codigo_config.json` de ejemplo con comentarios                              |
+| `--init --limpio`           | Genera un `.codigo_config.json` mínimo, solo claves y valores                           |
+| `--co`                      | Modo "context only": árbol + dependencias + fichas, sin código                          |
+| `--solo-cambios`            | Solo genera el archivo de cambios git                                                   |
+| `--limite N`                | Omite archivos con más de N líneas                                                      |
+| `--sin-minimos`             | Omite lockfiles, `.min.js`, y otros auto-generados                                      |
+| `--verbose`                 | Muestra detalle de archivos omitidos                                                    |
+| `--preview`                 | Muestra qué archivos se incluirían, sin escribir nada                                   |
+| `--stats`                   | Muestra estimación de tokens en consola, sin generar archivos                           |
+| `--ignorar-extra f1 f2 ...` | Agrega carpetas/archivos a ignorar para esta ejecución, sin tocar el config             |
+| `--objetivo "texto"`        | Genera `ia_[slug]_contexto.txt` optimizado para IA con estructura XML                   |
+| `--archivos f1 f2 ...`      | Incluye solo los archivos indicados. Con `--objetivo` genera `ia_[slug]_solicitado.txt` |
+| `--modelo NOMBRE`           | Modelo destino para estimar tokens. Ver opciones abajo.                                 |
+| `--ayuda`                   | Muestra ayuda                                                                           |
+
+### Modelos disponibles para `--modelo`
+
+`claude`, `gpt-4`, `gpt-4o`, `gpt-3.5`, `gemini`, `gemini-pro`, `llama`, `mistral`, `deepseek`, `default`
 
 ---
 
@@ -181,103 +151,116 @@ Este es el workflow principal para trabajar con la IA de forma iterativa y efici
 contexto . --objetivo "Agregar autenticación JWT con refresh tokens"
 ```
 
-El archivo generado incluye en su encabezado:
-- Tu objetivo claramente enunciado
-- Instrucciones explícitas para que la IA te responda con un comando listo para copiar
+Genera `ia_agregar_autenticacion_jwt_con_refresh_tokens_contexto.txt` con:
+
+- Estructura XML optimizada para LLMs
+- Tu objetivo en un bloque `<task>`
+- El código en bloques `<file path="...">` dentro de `<codebase>`
+- Instrucciones para que la IA responda con un comando listo para copiar
 
 ### Paso 2 — Pasás el archivo a la IA
 
-La IA recibirá el contexto completo del proyecto junto con el objetivo. En su respuesta:
-- Te dirá qué archivos necesita ver y por qué
-- Te dará un comando listo para pegar, como este:
+La IA recibirá el contexto completo y en su respuesta te dará un comando listo:
 
 ```
-COMANDO PARA GENERAR EL CONTEXTO SOLICITADO:
-contexto . --objetivo "Agregar autenticación JWT con refresh tokens" --archivos src/auth.py src/models/user.py src/routes/api.py
+<follow_up_command>
+contexto . --objetivo "Agregar autenticación JWT con refresh tokens" --archivos src/auth.py src/models/user.py
+</follow_up_command>
 ```
 
 ### Paso 3 — Ejecutás el comando que te dio la IA
 
-Copiás y pegás el comando en tu terminal. Esto genera `contexto_solicitado.txt` con solo los archivos que la IA pidió.
+```bash
+contexto . --objetivo "Agregar autenticación JWT con refresh tokens" --archivos src/auth.py src/models/user.py
+```
+
+Genera `ia_agregar_autenticacion_jwt_con_refresh_tokens_solicitado.txt` con exactamente los archivos que pidió.
 
 ### Paso 4 — Pasás ese archivo a la IA
 
-Ahora la IA tiene exactamente el contexto que necesita para resolver tu objetivo. Sin tokens desperdiciados.
+Ahora la IA tiene exactamente el contexto que necesita. Sin tokens desperdiciados.
 
 ---
 
-### `--objetivo "texto"`
+## 🔍 `--preview` — Ver antes de generar
 
-Define el objetivo de la sesión de trabajo con la IA.
-
-```bash
-contexto . --objetivo "Refactorizar el módulo de pagos para soportar múltiples proveedores"
-```
-
-Se puede combinar con cualquier otro modo:
+Muestra qué archivos se incluirían y una estimación de tokens, sin escribir ningún archivo.
 
 ```bash
-contexto . --co --objetivo "Entender la estructura antes de agregar tests"
-contexto . --solo-cambios --objetivo "Revisar los cambios del último PR"
+contexto . --preview
+contexto . --preview --modelo claude --sin-minimos --limite 400
 ```
 
-### `--archivos archivo1 archivo2 ...`
+Útil para calibrar la configuración antes de generar el contexto final.
 
-Genera un contexto con solo los archivos especificados, sin aplicar filtros de configuración. Acepta rutas relativas a la raíz del proyecto.
+---
+
+## 📊 `--stats` — Solo estimación de tokens
+
+Muestra la estimación de tokens en consola sin generar ningún archivo.
 
 ```bash
-contexto . --archivos src/auth.py src/models/user.py config/settings.py
+contexto . --stats --modelo claude
 ```
 
-Si se combina con `--objetivo`, el archivo generado se titula indicando el objetivo:
+---
+
+## 🚫 `--ignorar-extra` — Ignorar temporalmente sin tocar el config
 
 ```bash
-contexto . --objetivo "Agregar JWT" --archivos src/auth.py src/models/user.py
+contexto . --ignorar-extra tmp logs fixtures
 ```
 
-El archivo de salida se llama siempre `contexto_solicitado.txt` para que sea fácil de identificar.
+Agrega carpetas o archivos a la lista de ignorados solo para esa ejecución. Útil cuando tenés carpetas temporales que no querés commitear al config.
 
 ---
 
 ## 🗺️ Modo `--co` (Context Only)
 
-Este modo está pensado para **explorar antes de compartir**.
-
-Genera un archivo liviano que incluye:
+Genera un archivo liviano sin código que incluye:
 
 - Árbol de archivos del proyecto
 - Ficha por archivo (líneas, extensión, qué importa)
-- Grafo de dependencias internas (qué archivos se llaman entre sí)
+- Grafo de dependencias internas
 - Últimos commits de git
 
-**No incluye ninguna línea de código.**
+Modos:
 
-Flujo recomendado:
+- `--co` solo → `mapa_contexto.txt` (para el humano — explorar antes de decidir)
+- `--co --objetivo "..."` → `ia_[slug]_mapa.txt` (para la IA — que ella decida qué archivos necesita)
 
-```
-1. Corrés --co y revisás el mapa
-2. Decidís qué carpetas o archivos son relevantes para tu tarea
-3. Los configurás en "incluir_solo" o usás --solo-cambios
-4. Generás el contexto final y lo pasás a la IA
-```
+Flujo recomendado (manual):
 
 ```bash
+# 1. Ver el mapa vos mismo
 contexto . --co
+
+# 2. Decidir qué incluir y configurar en .codigo_config.json
+
+# 3. Generar el contexto final
+contexto . --objetivo "mi tarea"
+```
+
+Flujo recomendado (delegado a la IA):
+
+```bash
+# 1. Generar el mapa para la IA
+contexto . --co --objetivo "Agregar paginación a la API"
+
+# 2. Pasar ia_agregar_paginacion_a_la_api_mapa.txt a la IA
+# La IA analiza la estructura y devuelve un follow_up_command
+
+# 3. Ejecutar ese comando → la IA recibe exactamente lo que necesita
 ```
 
 ---
 
 ## 🧾 Archivo de configuración
 
-Podés personalizar el comportamiento creando `.codigo_config.json` en la raíz de tu proyecto.
-
-La forma más fácil es generarlo con `--init`:
-
 ```bash
-contexto . --init
+contexto . --init          # con comentarios explicativos
+contexto . --init --limpio # solo claves y valores
 ```
-
-Esto crea un archivo de ejemplo con todos los campos explicados. Editalo según tu proyecto.
 
 ### Ejemplo completo
 
@@ -292,92 +275,34 @@ Esto crea un archivo de ejemplo con todos los campos explicados. Editalo según 
   "carpeta_salida": "../contextos",
   "nombre_salida": "contexto_codigo.txt",
   "nombre_salida_cambios": "cambios_git.txt",
-  "nombre_salida_co": "mapa_contexto.txt"
+  "nombre_salida_co": "mapa_contexto.txt",
+  "modelo": "claude"
 }
 ```
 
 ### Opciones explicadas
 
-#### `descripcion`
-
-Una oración que describe tu proyecto. Aparece al inicio del archivo de contexto, antes del código. La IA la lee primero y orienta todo el análisis posterior.
-
-```json
-"descripcion": "Backend en Node.js para una app de delivery. Usa Express y PostgreSQL."
-```
-
-#### `extensiones`
-
-Extensiones de archivo a incluir.
-
-```json
-"extensiones": [".py", ".js", ".ts"]
-```
-
-Default: `.py`, `.js`, `.ts`, `.jsx`, `.tsx`, `.html`, `.css`
-
-#### `ignorar`
-
-Carpetas o archivos a excluir.
-
-```json
-"ignorar": ["node_modules", ".git", "dist", "venv"]
-```
-
-Default: `node_modules`, `.git`, `__pycache__`, `dist`, `.env`, `venv`, `build`
-
-#### `incluir_solo`
-
-Si se define, solo se analizan estas carpetas raíz. Todo lo demás se ignora.
-
-```json
-"incluir_solo": ["src", "api"]
-```
-
-#### `limite_lineas`
-
-Archivos con más líneas que este valor se omiten. Útil para reducir tokens.
-
-```json
-"limite_lineas": 500
-```
-
-Default: sin límite
-
-#### `omitir_autogenerados`
-
-Si es `true`, omite automáticamente:
-
-- Lockfiles: `package-lock.json`, `yarn.lock`, `poetry.lock`, `Pipfile.lock`, `go.sum`, etc.
-- Archivos minificados: `*.min.js`, `*.bundle.js`, `*.chunk.js`
-- Archivos auto-generados: `*_pb2.py` (protobuf), `*.generated.*`, migraciones auto-numeradas
-- Archivos con primera línea mayor a 500 caracteres (heurística de minificado)
-
-```json
-"omitir_autogenerados": true
-```
-
-#### `carpeta_salida`
-
-Dónde guardar los archivos generados. Acepta rutas absolutas o relativas al proyecto.
-
-```json
-"carpeta_salida": "../contextos"
-```
-
-Default: carpeta `.codigo_completo/` dentro del proyecto
+| Clave                   | Descripción                                                                |
+| ----------------------- | -------------------------------------------------------------------------- |
+| `descripcion`           | Una oración del proyecto. Aparece en los metadatos del archivo generado.   |
+| `extensiones`           | Extensiones a incluir. Default: `.py .js .ts .jsx .tsx .html .css`         |
+| `ignorar`               | Carpetas/archivos a excluir. Default: `node_modules .git __pycache__` etc. |
+| `incluir_solo`          | Si se define, solo se incluyen estas carpetas raíz.                        |
+| `limite_lineas`         | Omite archivos con más líneas que este valor. `null` = sin límite.         |
+| `omitir_autogenerados`  | Omite lockfiles, minificados, protobuf, migraciones auto-numeradas.        |
+| `carpeta_salida`        | Dónde guardar los archivos. Default: `.codigo_completo/`                   |
+| `nombre_salida`         | Nombre del archivo de contexto completo.                                   |
+| `nombre_salida_cambios` | Nombre del archivo de cambios git.                                         |
+| `nombre_salida_co`      | Nombre del archivo de mapa de contexto.                                    |
+| `modelo`                | Modelo para estimación de tokens. CLI tiene prioridad.                     |
 
 ---
 
 ## 🔄 Integración con Git
 
-Si el proyecto es un repositorio git, el script genera automáticamente `cambios_git.txt` con:
+Si el proyecto es un repositorio git, el script genera automáticamente `cambios_git.txt` con los archivos que cambiaron. También incluye los últimos commits como contexto en el encabezado.
 
-- Los archivos que cambiaron entre `ORIG_HEAD` y `HEAD` (después de un pull/merge/rebase)
-- Si no existe `ORIG_HEAD`: los cambios staged y unstaged sin commitear
-- Los últimos 5 commits incluidos como contexto en el encabezado del archivo
-
-Si la carpeta no es un repo git, simplemente no genera el archivo de cambios.
+Los commits se decodifican correctamente incluso en Windows donde git puede devolver texto con encoding incorrecto.
 
 ---
 
@@ -385,8 +310,8 @@ Si la carpeta no es un repo git, simplemente no genera el archivo de cambios.
 
 Los archivos se ordenan para que la IA construya el modelo mental del proyecto de arriba hacia abajo:
 
-1. Primero los archivos en la raíz del proyecto
-2. Dentro de cada nivel, los archivos clave van primero: `main`, `index`, `app`, `server`, `__init__`, `config`, `settings`, `manage`, etc.
+1. Archivos en la raíz del proyecto primero
+2. Dentro de cada nivel, archivos clave van primero: `main`, `index`, `app`, `server`, `__init__`, `config`, `settings`, etc.
 3. Luego el resto, ordenado alfabéticamente
 
 ---
@@ -394,17 +319,19 @@ Los archivos se ordenan para que la IA construya el modelo mental del proyecto d
 ## 💡 Tips
 
 ```bash
-# Ver el mapa del proyecto y abrirlo directo
+# Ver el mapa y abrirlo directo
 contexto . --co && code .codigo_completo/mapa_contexto.txt
 
-# Generar contexto solo de los cambios y abrirlo
+# Generar contexto solo de cambios
 contexto . --solo-cambios && code .codigo_completo/cambios_git.txt
 
-# Proyecto grande: omitir auto-generados y limitar tamaño de archivos
-contexto . --sin-minimos --limite 400
+# Proyecto grande: preview antes de generar
+contexto . --preview --sin-minimos --limite 400
 
-# Ver exactamente qué se está omitiendo
-contexto . --verbose
+# Workflow IA completo
+contexto . --objetivo "Agregar paginación a la API" --modelo claude
+# → pasás ia_agregar_paginacion_a_la_api_contexto.txt a la IA
+# → la IA te da el follow_up_command
+# → ejecutás ese comando
+# → pasás ia_agregar_paginacion_a_la_api_solicitado.txt a la IA
 ```
-
----
