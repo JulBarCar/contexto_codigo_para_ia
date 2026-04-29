@@ -1,0 +1,4 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 "C:\Users\julia\OneDrive\Documentos\contexto_codigo_para_ia\code_context.py" "$@"
