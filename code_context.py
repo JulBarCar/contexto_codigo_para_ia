@@ -32,6 +32,9 @@ OPCIONES CLI:
                             optimizado para IA con nombre ia_[slug]_contexto.txt
   --archivos f1 f2 ...      Incluye solo los archivos indicados (rutas relativas).
                             Con --objetivo genera ia_[slug]_solicitado.txt
+  --continua                Segunda vuelta: omite <context_metadata>, <file_tree> e
+                            <file_index> en ia_[slug]_solicitado.txt (la IA ya los vio).
+                            Solo válido con --objetivo + --archivos.
   --modelo NOMBRE           Modelo/agente destino para estimar tokens y costo.
                             Opciones: claude, gpt-4, gpt-4o, gpt-3.5, gemini,
                                       gemini-pro, llama, mistral, deepseek, default
@@ -262,6 +265,7 @@ def parsear_args(argv: list[str]) -> dict:
         "objetivo":      None,
         "archivos":      None,
         "modelo":        None,
+        "continua":      False,
     }
 
     i = 0
@@ -286,6 +290,8 @@ def parsear_args(argv: list[str]) -> dict:
             args["preview"] = True
         elif tok == "--stats":
             args["stats"] = True
+        elif tok == "--continua":
+            args["continua"] = True
         elif tok == "--limite":
             i += 1
             if i >= len(argv):
@@ -638,12 +644,12 @@ def en_carpetas_permitidas(path: Path, raiz: Path, incluir_solo: list | None) ->
         return False
 
 
-def recolectar_archivos(raiz: Path, config: dict,
-                         omitir_autogenerados: bool = False,
-                         limite_lineas: int | None = None,
-                         verbose: bool = False) -> list[Path]:
-    archivos = []
-    for archivo in raiz.rglob("*"):
+def _aplicar_filtros(archivos: list[Path], raiz: Path, config: dict,
+                      omitir_autogenerados: bool = False,
+                      limite_lineas: int | None = None,
+                      verbose: bool = False) -> list[Path]:
+    resultado = []
+    for archivo in archivos:
         if not archivo.is_file():
             continue
         try:
@@ -663,34 +669,23 @@ def recolectar_archivos(raiz: Path, config: dict,
         elif limite and not omitir:
             if es_autogenerado(archivo, limite, verbose):
                 continue
-        archivos.append(archivo)
-    return ordenar_archivos(archivos)
+        resultado.append(archivo)
+    return ordenar_archivos(resultado)
+
+
+def recolectar_archivos(raiz: Path, config: dict,
+                         omitir_autogenerados: bool = False,
+                         limite_lineas: int | None = None,
+                         verbose: bool = False) -> list[Path]:
+    todos = [archivo for archivo in raiz.rglob("*")]
+    return _aplicar_filtros(todos, raiz, config, omitir_autogenerados, limite_lineas, verbose)
 
 
 def filtrar_por_config(archivos: list[Path], raiz: Path, config: dict,
                         omitir_autogenerados: bool = False,
                         limite_lineas: int | None = None,
                         verbose: bool = False) -> list[Path]:
-    resultado = []
-    for archivo in archivos:
-        if not archivo.is_file():
-            continue
-        try:
-            rel = archivo.relative_to(raiz)
-        except ValueError:
-            continue
-        if debe_ignorar(rel, config["ignorar"]):
-            continue
-        if not en_carpetas_permitidas(archivo, raiz, config["incluir_solo"]):
-            continue
-        if archivo.suffix not in config["extensiones"]:
-            continue
-        limite = limite_lineas if limite_lineas is not None else config.get("limite_lineas")
-        omitir = omitir_autogenerados or config.get("omitir_autogenerados", False)
-        if omitir and es_autogenerado(archivo, limite, verbose):
-            continue
-        resultado.append(archivo)
-    return ordenar_archivos(resultado)
+    return _aplicar_filtros(archivos, raiz, config, omitir_autogenerados, limite_lineas, verbose)
 
 
 def construir_arbol(archivos: list[Path], raiz: Path) -> str:
@@ -727,14 +722,16 @@ def escribir_encabezado(f, config: dict, raiz: Path, titulo: str,
     f.write(f"\n# {sep}\n\n")
 
 
-def _escribir_y_estimar(salida_path: Path, writer_fn, modelo: str) -> dict | None:
+def _escribir_y_estimar(salida_path: Path, writer_fn, modelo: str,
+                         incluir_en_archivo: bool = False) -> dict | None:
     with open(salida_path, "w", encoding="utf-8") as f:
         writer_fn(f)
     try:
         texto = salida_path.read_text(encoding="utf-8", errors="replace")
         est   = estimar_tokens(texto, modelo)
-        with open(salida_path, "a", encoding="utf-8") as f:
-            f.write(formatear_estimacion_tokens(est))
+        if incluir_en_archivo:
+            with open(salida_path, "a", encoding="utf-8") as f:
+                f.write(formatear_estimacion_tokens(est))
         return est
     except Exception:
         return None
@@ -762,7 +759,7 @@ def escribir_archivo(salida_path: Path, archivos: list[Path], raiz: Path,
             except Exception as e:
                 f.write(f"# [No se pudo leer: {e}]\n")
 
-    return _escribir_y_estimar(salida_path, writer, modelo)
+    return _escribir_y_estimar(salida_path, writer, modelo, incluir_en_archivo=True)
 
 
 def escribir_context_only(salida_path: Path, archivos: list[Path],
@@ -823,13 +820,8 @@ def escribir_context_only(salida_path: Path, archivos: list[Path],
                 f.write("\n")
         if not tiene_deps:
             f.write("  (No se detectaron dependencias internas entre los archivos incluidos)\n\n")
-        f.write(f"# {sep}\n# INSTRUCCIONES PARA EL USUARIO\n# {sep}\n\n")
-        f.write("# Este archivo NO contiene código fuente.\n")
-        f.write("# Úsalo para decidir qué archivos pasarle a la IA.\n")
-        f.write("# Luego ejecuta el script indicando solo esas carpetas en 'incluir_solo'\n")
-        f.write("# o usa --solo-cambios si trabajas con git.\n\n")
 
-    return _escribir_y_estimar(salida_path, writer, modelo)
+    return _escribir_y_estimar(salida_path, writer, modelo, incluir_en_archivo=True)
 
 
 # ── Escritura: modo IA mapa (--co + --objetivo) ──────────────────────────────
@@ -956,7 +948,7 @@ def escribir_mapa_ia(salida_path: Path, archivos: list[Path], raiz: Path,
         f.write("    Be selective — only request files genuinely needed for the task.\n")
         f.write("</response_instructions>\n")
 
-    return _escribir_y_estimar(salida_path, writer, modelo)
+    return _escribir_y_estimar(salida_path, writer, modelo, incluir_en_archivo=False)
 
 
 # ── Escritura: modo IA (--objetivo) ──────────────────────────────────────────
@@ -980,7 +972,8 @@ def escribir_mapa_ia(salida_path: Path, archivos: list[Path], raiz: Path,
 def escribir_archivo_ia(salida_path: Path, archivos: list[Path], raiz: Path,
                          config: dict, es_solicitado: bool = False,
                          commits: list[str] | None = None,
-                         modelo: str = "default") -> dict | None:
+                         modelo: str = "default",
+                         es_segunda_vuelta: bool = False) -> dict | None:
     """
     Genera un archivo de contexto optimizado para ser leído directamente por una IA.
     Sin decoración visual. Estructura semántica con etiquetas tipo XML.
@@ -998,30 +991,47 @@ def escribir_archivo_ia(salida_path: Path, archivos: list[Path], raiz: Path,
 
     def writer(f):
         # ── Metadatos compactos ──────────────────────────────────────────────
-        f.write("<context_metadata>\n")
-        f.write(f"  generated_at: {ts}\n")
-        f.write(f"  project_root: {raiz}\n")
-        if descripcion:
-            f.write(f"  project_description: {descripcion}\n")
-        f.write(f"  file_count: {len(archivos)}\n")
-        f.write(f"  extensions_included: {', '.join(sorted(config['extensiones']))}\n")
-        if config.get("incluir_solo"):
-            f.write(f"  root_dirs_included: {', '.join(config['incluir_solo'])}\n")
-        if commits:
-            f.write(f"  recent_commits:\n")
-            for c in commits[:5]:
-                f.write(f"    - {c}\n")
-        f.write("</context_metadata>\n\n")
+        if not es_segunda_vuelta:
+            f.write("<context_metadata>\n")
+            f.write(f"  generated_at: {ts}\n")
+            f.write(f"  project_root: {raiz}\n")
+            if descripcion:
+                f.write(f"  project_description: {descripcion}\n")
+            f.write(f"  file_count: {len(archivos)}\n")
+            f.write(f"  extensions_included: {', '.join(sorted(config['extensiones']))}\n")
+            if config.get("incluir_solo"):
+                f.write(f"  root_dirs_included: {', '.join(config['incluir_solo'])}\n")
+            if commits:
+                f.write(f"  recent_commits:\n")
+                for c in commits[:5]:
+                    f.write(f"    - {c}\n")
+            f.write("</context_metadata>\n\n")
 
         # ── Objetivo / tarea ─────────────────────────────────────────────────
         f.write("<task>\n")
         f.write(f"  {objetivo}\n")
         f.write("</task>\n\n")
 
-        # ── Árbol de archivos ────────────────────────────────────────────────
-        f.write("<file_tree>\n")
-        f.write(construir_arbol(archivos, raiz))
-        f.write("\n</file_tree>\n\n")
+        # ── Índice de archivos (reemplaza file_tree; solo en primera vuelta) ──
+        if not es_segunda_vuelta:
+            f.write("<file_index>\n")
+            for archivo in archivos:
+                relativo      = archivo.relative_to(raiz)
+                importaciones = extraer_importaciones(archivo)
+                try:
+                    n_lineas = sum(1 for _ in archivo.open(encoding="utf-8", errors="replace"))
+                except Exception:
+                    n_lineas = "?"
+                f.write(f"  <file path=\"{relativo.as_posix()}\"")
+                f.write(f" lines=\"{n_lineas}\"")
+                f.write(f" ext=\"{archivo.suffix}\"")
+                if importaciones:
+                    deps_str = ", ".join(importaciones[:15])
+                    if len(importaciones) > 15:
+                        deps_str += f" (+{len(importaciones)-15})"
+                    f.write(f" imports=\"{deps_str}\"")
+                f.write(" />\n")
+            f.write("</file_index>\n\n")
 
         # ── Contenido de archivos ────────────────────────────────────────────
         f.write("<codebase>\n")
@@ -1066,7 +1076,7 @@ def escribir_archivo_ia(salida_path: Path, archivos: list[Path], raiz: Path,
             f.write("  Do not ask for additional files.\n")
             f.write("</response_instructions>\n")
 
-    return _escribir_y_estimar(salida_path, writer, modelo)
+    return _escribir_y_estimar(salida_path, writer, modelo, incluir_en_archivo=False)
 
 
 # ── Preview y Stats ───────────────────────────────────────────────────────────
@@ -1161,6 +1171,10 @@ def _log_ok(label: str, path: Path, n_archivos: int, est: dict | None) -> None:
         token_info = ""
     n = n_archivos
     print(f"[OK]     {label}  →  {path.name}  ({n} archivo{'s' if n != 1 else ''}){token_info}")
+    if est and est.get("porcentaje_window") is not None and est["porcentaje_window"] > 100:
+        pct = est["porcentaje_window"]
+        print(f"[AVISO]  El contexto excede el context window del modelo ({pct:.0f}%).")
+        print(f"         Considerá usar --limite, --sin-minimos o 'incluir_solo' en el config.")
 
 # ── Función principal ─────────────────────────────────────────────────────────
 
@@ -1235,6 +1249,7 @@ def unificar(args: dict) -> None:
                 config=config,
                 es_solicitado=True,
                 modelo=modelo,
+                es_segunda_vuelta=args["continua"],
             )
             _log_ok("Contexto IA solicitado", salida_path, len(archivos_resueltos), est)
         else:
@@ -1287,6 +1302,10 @@ def unificar(args: dict) -> None:
             est = escribir_context_only(salida_co, todos, raiz, config, commits, modelo)
             _log_ok("Mapa de contexto  ", salida_co, len(todos), est)
             print(f"         (sin código fuente)")
+            print(f"         Este archivo NO contiene código fuente.")
+            print(f"         Úsalo para decidir qué archivos pasarle a la IA.")
+            print(f"         Luego ejecuta el script indicando solo esas carpetas en 'incluir_solo'")
+            print(f"         o usa --solo-cambios si trabajas con git.")
         return
 
     # ── Modo --objetivo: contexto completo optimizado para IA ─────────────────

@@ -8,6 +8,7 @@ Pensado para:
 - Explorar la estructura de un proyecto antes de decidir qué compartir
 - Revisar solo los archivos que cambiaron desde el último pull
 - Generar contexto optimizado para IA con un objetivo específico
+- Trabajar en flujos de dos pasos sin repetir tokens ya enviados
 
 ---
 
@@ -100,16 +101,16 @@ Si no se indica carpeta, usa la carpeta actual (`.`).
 ### Ejemplos rápidos
 
 ```bash
-contexto                        # carpeta actual, modo completo
-contexto ../mi-backend          # carpeta específica
-contexto . --co                 # mapa de contexto sin código
-contexto . --init               # genera config con comentarios
-contexto . --init --limpio      # genera config mínimo, sin comentarios
-contexto . --solo-cambios       # solo archivos modificados en git
-contexto . --sin-minimos        # omite lockfiles y archivos auto-generados
-contexto . --limite 300         # omite archivos de más de 300 líneas
-contexto . --verbose            # muestra qué archivos se omiten y por qué
-contexto . --preview            # muestra qué se incluiría, sin generar nada
+contexto                             # carpeta actual, modo completo
+contexto ../mi-backend               # carpeta específica
+contexto . --co                      # mapa de contexto sin código
+contexto . --init                    # genera config con comentarios
+contexto . --init --limpio           # genera config mínimo, sin comentarios
+contexto . --solo-cambios            # solo archivos modificados en git
+contexto . --sin-minimos             # omite lockfiles y archivos auto-generados
+contexto . --limite 300              # omite archivos de más de 300 líneas
+contexto . --verbose                 # muestra qué archivos se omiten y por qué
+contexto . --preview                 # muestra qué se incluiría, sin generar nada
 contexto . --stats --modelo claude   # estimación de tokens en consola
 contexto . --ignorar-extra tmp logs  # ignorar carpetas extra sin tocar config
 ```
@@ -132,6 +133,7 @@ contexto . --ignorar-extra tmp logs  # ignorar carpetas extra sin tocar config
 | `--ignorar-extra f1 f2 ...` | Agrega carpetas/archivos a ignorar para esta ejecución, sin tocar el config             |
 | `--objetivo "texto"`        | Genera `ia_[slug]_contexto.txt` optimizado para IA con estructura XML                   |
 | `--archivos f1 f2 ...`      | Incluye solo los archivos indicados. Con `--objetivo` genera `ia_[slug]_solicitado.txt` |
+| `--continua`                | Segunda vuelta: omite metadatos ya enviados en `ia_[slug]_solicitado.txt`. Ver abajo.   |
 | `--modelo NOMBRE`           | Modelo destino para estimar tokens. Ver opciones abajo.                                 |
 | `--ayuda`                   | Muestra ayuda                                                                           |
 
@@ -155,6 +157,7 @@ Genera `ia_agregar_autenticacion_jwt_con_refresh_tokens_contexto.txt` con:
 
 - Estructura XML optimizada para LLMs
 - Tu objetivo en un bloque `<task>`
+- Un `<file_index>` compacto con ruta, líneas, extensión e imports de cada archivo
 - El código en bloques `<file path="...">` dentro de `<codebase>`
 - Instrucciones para que la IA responda con un comando listo para copiar
 
@@ -182,6 +185,26 @@ Ahora la IA tiene exactamente el contexto que necesita. Sin tokens desperdiciado
 
 ---
 
+## ⏭️ `--continua` — Segunda vuelta sin repetir contexto
+
+Cuando usás el flujo de dos pasos (`--co --objetivo` → `--objetivo --archivos`), el archivo de la segunda vuelta normalmente repetiría `<context_metadata>`, `<file_tree>` y `<file_index>` que la IA ya vio en el primero. Son tokens desperdiciados.
+
+`--continua` le indica al script que omita esos bloques y genere solo lo nuevo:
+
+```bash
+# 1er envío: mapa completo (la IA decide qué archivos necesita)
+contexto . --co --objetivo "Agregar paginación a la API"
+
+# 2do envío: solo el código pedido, sin repetir metadatos
+contexto . --objetivo "Agregar paginación a la API" --archivos src/api.py src/models.py --continua
+```
+
+El archivo resultante contiene únicamente `<task>`, `<codebase>` y `<response_instructions>`. La IA ya tiene el resto del contexto de la vuelta anterior.
+
+> Solo tiene efecto combinado con `--objetivo` + `--archivos`. En otros modos se ignora.
+
+---
+
 ## 🔍 `--preview` — Ver antes de generar
 
 Muestra qué archivos se incluirían y una estimación de tokens, sin escribir ningún archivo.
@@ -191,7 +214,11 @@ contexto . --preview
 contexto . --preview --modelo claude --sin-minimos --limite 400
 ```
 
-Útil para calibrar la configuración antes de generar el contexto final.
+Útil para calibrar la configuración antes de generar el contexto final. Muestra:
+
+- Lista de archivos con su cantidad de líneas
+- Resumen por extensión
+- Estimación de tokens, costo y porcentaje del context window del modelo
 
 ---
 
@@ -202,6 +229,8 @@ Muestra la estimación de tokens en consola sin generar ningún archivo.
 ```bash
 contexto . --stats --modelo claude
 ```
+
+Útil para decidir si necesitás filtrar el proyecto antes de generar.
 
 ---
 
@@ -223,6 +252,8 @@ Genera un archivo liviano sin código que incluye:
 - Ficha por archivo (líneas, extensión, qué importa)
 - Grafo de dependencias internas
 - Últimos commits de git
+
+Las instrucciones de uso se imprimen en consola, no en el archivo de salida, para mantener `mapa_contexto.txt` limpio.
 
 Modos:
 
@@ -250,7 +281,27 @@ contexto . --co --objetivo "Agregar paginación a la API"
 # 2. Pasar ia_agregar_paginacion_a_la_api_mapa.txt a la IA
 # La IA analiza la estructura y devuelve un follow_up_command
 
-# 3. Ejecutar ese comando → la IA recibe exactamente lo que necesita
+# 3. Ejecutar ese comando con --continua (la IA ya vio los metadatos)
+contexto . --objetivo "Agregar paginación a la API" --archivos src/api.py --continua
+```
+
+---
+
+## 📈 Estimación de tokens
+
+El script estima tokens, costo y porcentaje del context window para cada archivo generado. La estimación siempre aparece en la consola al terminar:
+
+```
+[OK]     Contexto completo  →  contexto_codigo.txt  (12 archivos)  [~18.500 tokens  |  ~$0.0555 USD  |  9% del context window ✓]
+```
+
+Los archivos destinados al humano (`contexto_codigo.txt`, `mapa_contexto.txt`) también incluyen el bloque de estimación al final del archivo. Los archivos destinados a la IA (`ia_*`) **no** lo incluyen, para mantener el XML limpio.
+
+Si el contexto generado supera el 100% del context window del modelo, se muestra un aviso adicional:
+
+```
+[AVISO]  El contexto excede el context window del modelo (143%).
+         Considerá usar --limite, --sin-minimos o 'incluir_solo' en el config.
 ```
 
 ---
@@ -294,7 +345,7 @@ contexto . --init --limpio # solo claves y valores
 | `nombre_salida`         | Nombre del archivo de contexto completo.                                   |
 | `nombre_salida_cambios` | Nombre del archivo de cambios git.                                         |
 | `nombre_salida_co`      | Nombre del archivo de mapa de contexto.                                    |
-| `modelo`                | Modelo para estimación de tokens. CLI tiene prioridad.                     |
+| `modelo`                | Modelo para estimación de tokens. La CLI tiene prioridad.                  |
 
 ---
 
@@ -316,6 +367,26 @@ Los archivos se ordenan para que la IA construya el modelo mental del proyecto d
 
 ---
 
+## 🗂️ Estructura XML de los archivos para IA
+
+Los archivos `ia_*` usan una estructura XML pensada para ser parseada fácilmente por modelos de lenguaje:
+
+```
+<context_metadata>        ← metadatos del proyecto (omitido con --continua)
+<task>                    ← tu objetivo
+<file_index>              ← índice compacto: path, líneas, extensión, imports
+                            (omitido con --continua; ausente en --co --objetivo)
+<codebase>                ← archivos con su código
+  <file path="...">
+  </file>
+<dependency_graph>        ← solo en modo --co --objetivo
+<response_instructions>   ← instrucciones para la IA
+```
+
+El `<file_index>` en el modo `--objetivo` reemplaza al árbol de directorios en texto plano: aporta la misma orientación estructural pero con metadatos adicionales (líneas, extensión, imports) y sin redundar con los paths ya presentes en `<codebase>`.
+
+---
+
 ## 💡 Tips
 
 ```bash
@@ -328,10 +399,12 @@ contexto . --solo-cambios && code .codigo_completo/cambios_git.txt
 # Proyecto grande: preview antes de generar
 contexto . --preview --sin-minimos --limite 400
 
-# Workflow IA completo
-contexto . --objetivo "Agregar paginación a la API" --modelo claude
-# → pasás ia_agregar_paginacion_a_la_api_contexto.txt a la IA
-# → la IA te da el follow_up_command
-# → ejecutás ese comando
+# Workflow IA completo de dos pasos (eficiente en tokens)
+contexto . --co --objetivo "Agregar paginación a la API" --modelo claude
+# → pasás ia_agregar_paginacion_a_la_api_mapa.txt a la IA
+# → la IA analiza la estructura y te da el follow_up_command
+# → ejecutás con --continua para no repetir metadatos
+contexto . --objetivo "Agregar paginación a la API" --archivos src/api.py src/models.py --continua
 # → pasás ia_agregar_paginacion_a_la_api_solicitado.txt a la IA
+# → la IA tiene exactamente lo que necesita, sin tokens desperdiciados
 ```
