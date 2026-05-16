@@ -1,90 +1,62 @@
-# 📦 code_context.py
+# code_context.py
 
-Herramienta CLI en Python para generar **contexto de código** a partir de un proyecto, listo para pasarle a una IA.
+Script de Python que **unifica todo el código de tu proyecto en un único `.txt`** listo para pasarle a una IA. Sin dependencias externas, solo Python 3.10+.
 
-Pensado para:
-
-- Pasar tu código a una IA de forma ordenada y eficiente
-- Explorar la estructura de un proyecto antes de decidir qué compartir
-- Revisar solo los archivos que cambiaron desde el último pull
-- Generar contexto optimizado para IA con un objetivo específico
-- Trabajar en flujos de dos pasos sin repetir tokens ya enviados
+Hacés `contexto .` en la raíz del proyecto y te genera un archivo con el árbol de archivos + el contenido de cada uno, filtrando automáticamente `node_modules`, `.git`, lockfiles y demás ruido. También detecta cambios de git, genera contextos optimizados por objetivo y estima tokens y costo por modelo.
 
 ---
 
-## 🚀 ¿Qué genera?
+## ⚡ Instalación
 
-| Archivo                        | Cuándo se genera                    | Contenido                                           |
+Descargá los tres archivos (`code_context.py`, `setup_windows.bat`, `setup_linux.sh`) en cualquier carpeta y ejecutá el instalador de tu sistema. Instala el comando `contexto` globalmente para que funcione desde cualquier carpeta.
+
+**🪟 Windows** — doble clic en `setup_windows.bat`
+
+- Crea `%USERPROFILE%\code-context\` y agrega esa ruta al PATH del usuario
+- Cerrá y volvé a abrir la terminal
+
+**🐧 Linux / Mac** — desde la terminal en esa carpeta(deveria de poder isntalarse con doble click tambien):
+
+```bash
+bash setup_linux.sh
+```
+
+- Copia el script a `~/.local/bin/` y agrega esa ruta al PATH en `.bashrc` si no estaba
+- Reiniciá la terminal (o ejecutá `source ~/.bashrc`)
+
+**Verificar que quedó instalado:**
+
+```bash
+contexto --ayuda
+```
+
+---
+
+## 🚀 Uso básico
+
+```bash
+contexto .                            # contexto completo del proyecto actual
+contexto ../mi-backend                # carpeta específica
+contexto . --objetivo "Agregar JWT"   # contexto optimizado para una tarea
+contexto . --solo-cambios             # solo archivos modificados en git
+contexto . --preview --modelo claude  # ver qué incluiría + estimación de tokens
+```
+
+El resultado queda en `.codigo_completo/` dentro del proyecto.
+
+---
+
+## ¿Qué genera?
+
+| Archivo                        | Cuándo                              | Contenido                                           |
 | ------------------------------ | ----------------------------------- | --------------------------------------------------- |
-| `contexto_codigo.txt`          | Siempre (modo normal)               | Todo el código del proyecto                         |
+| `contexto_codigo.txt`          | Siempre                             | Todo el código del proyecto                         |
 | `cambios_git.txt`              | Si es repo git                      | Solo archivos modificados desde el último pull      |
-| `mapa_contexto.txt`            | Con `--co`                          | Árbol + dependencias + fichas, **sin código**       |
+| `mapa_contexto.txt`            | Con `--co`                          | Árbol + dependencias + fichas, sin código           |
 | `ia_[objetivo]_contexto.txt`   | Con `--objetivo`                    | Contexto completo optimizado para IA, formato XML   |
 | `ia_[objetivo]_mapa.txt`       | Con `--co` + `--objetivo`           | Mapa estructural (sin código) optimizado para IA    |
 | `ia_[objetivo]_solicitado.txt` | Con `--objetivo` + `--archivos`     | Archivos específicos pedidos por la IA, formato XML |
 | `contexto_solicitado.txt`      | Con `--archivos` (sin `--objetivo`) | Solo los archivos indicados, formato estándar       |
-
----
-
-## ⚙️ Requisitos
-
-- Python 3.10+
-
-No requiere dependencias externas.
-
----
-
-## 📁 Estructura recomendada
-
-```
-code-context/
-├── code_context.py
-├── contexto.bat     ← Windows
-└── contexto.sh      ← Linux / Mac
-```
-
----
-
-## 🔧 Instalación
-
-### 1. Crear los scripts de atajo
-
-#### 🪟 Windows — `contexto.bat`
-
-```bat
-@echo off
-python "%~dp0code_context.py" %*
-```
-
-#### 🐧 Linux / Mac — `contexto.sh`
-
-```bash
-#!/bin/bash
-python3 "$(dirname "$0")/code_context.py" "$@"
-```
-
-```bash
-chmod +x contexto.sh
-```
-
----
-
-### 2. Agregar al PATH (opcional pero recomendado)
-
-#### 🪟 Windows
-
-1. Copiá la ruta de la carpeta (ej: `C:\tools\code-context`)
-2. Buscá "Editar variables de entorno del sistema"
-3. En **Path** → "Editar" → "Nuevo"
-4. Pegá la ruta → Aceptar todo
-
-#### 🐧 Linux / Mac
-
-```bash
-nano ~/.bashrc   # o ~/.zshrc si usás zsh
-export PATH="$PATH:/home/tu-usuario/tools/code-context"
-source ~/.bashrc
-```
 
 ---
 
