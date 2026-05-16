@@ -15,7 +15,7 @@ Descargá los tres archivos (`code_context.py`, `setup_windows.bat`, `setup_linu
 - Crea `%USERPROFILE%\code-context\` y agrega esa ruta al PATH del usuario
 - Cerrá y volvé a abrir la terminal
 
-**🐧 Linux / Mac** — desde la terminal en esa carpeta(deveria de poder instalarse con doble click tambien):
+**🐧 Linux / Mac** — desde la terminal en esa carpeta(debería de poder instalarse con doble click tambien):
 
 ```bash
 bash setup_linux.sh
