@@ -1391,8 +1391,9 @@ def escribir_archivo_ia(salida_path: Path, archivos: list[Path], raiz: Path,
     )
 
     def writer(f):
-        # ── Metadatos compactos ──────────────────────────────────────────────
+        # ── Bloques omitidos en segunda vuelta (--continua) ──────────────────
         if not es_segunda_vuelta:
+            # ── Metadatos compactos ──────────────────────────────────────────────
             f.write("<context_metadata>\n")
             f.write(f"  generated_at: {ts}\n")
             f.write(f"  project_root: {raiz}\n")
@@ -1408,13 +1409,12 @@ def escribir_archivo_ia(salida_path: Path, archivos: list[Path], raiz: Path,
                     f.write(f"    - {c}\n")
             f.write("</context_metadata>\n\n")
 
-        # ── Objetivo / tarea ─────────────────────────────────────────────────
-        f.write("<task>\n")
-        f.write(f"  {objetivo}\n")
-        f.write("</task>\n\n")
+            # ── Objetivo / tarea ─────────────────────────────────────────────────
+            f.write("<task>\n")
+            f.write(f"  {objetivo}\n")
+            f.write("</task>\n\n")
 
-        # ── Índice de archivos (solo en primera vuelta) ──────────────────────
-        if not es_segunda_vuelta:
+            # ── Índice de archivos ───────────────────────────────────────────────
             f.write("<file_index>\n")
             for archivo in archivos:
                 relativo      = archivo.relative_to(raiz)
@@ -1434,49 +1434,56 @@ def escribir_archivo_ia(salida_path: Path, archivos: list[Path], raiz: Path,
                 f.write(" />\n")
             f.write("</file_index>\n\n")
 
+            f.write("<codebase>\n")
+
         # ── Contenido de archivos ────────────────────────────────────────────
-        f.write("<codebase>\n")
         for archivo in archivos:
             relativo = archivo.relative_to(raiz)
-            f.write(f"\n<file path=\"{relativo.as_posix()}\">\n")
+            
+            if es_segunda_vuelta:
+                # Formato ultra crudo para --continua: solo la ruta antes del código
+                f.write(f"### Archivo: {relativo.as_posix()} ###\n")
+            else:
+                f.write(f"\n<file path=\"{relativo.as_posix()}\">\n")
+            
             contenido = leer_contenido(archivo, config)
             f.write(contenido)
             if not contenido.endswith("\n"):
                 f.write("\n")
-            f.write(f"</file>\n")
-        f.write("\n</codebase>\n\n")
+                
+            if not es_segunda_vuelta:
+                f.write(f"</file>\n")
 
-        # ── Instrucción de respuesta ─────────────────────────────────────────
-        if not es_solicitado:
+        # ── Cierre e instrucciones (solo en primera vuelta) ──────────────────
+        if not es_segunda_vuelta:
+            f.write("\n</codebase>\n\n")
+            
             f.write("<response_instructions>\n")
-            f.write("  You are receiving the full codebase for the project described above.\n")
-            f.write("  Your task is defined in <task>.\n\n")
-            f.write("  STEP 1 — Identify missing context:\n")
-            f.write("    If you need additional files not present in <codebase> to complete\n")
-            f.write("    the task, list each one with a one-sentence reason.\n\n")
-            f.write("  STEP 2 — Provide a follow-up command:\n")
-            f.write("    If additional files are needed, output EXACTLY this block\n")
-            f.write("    (copy-paste ready, no surrounding text):\n\n")
-            f.write("    <follow_up_command>\n")
-            f.write(f"    {cmd_followup}\n")
-            f.write("    </follow_up_command>\n\n")
-            f.write("    Replace the placeholder paths with real relative paths.\n")
-            f.write("    Use forward slashes. Paths are relative to project_root.\n\n")
-            f.write("  STEP 3 — If you already have enough context:\n")
-            f.write("    State that explicitly, then proceed directly with your response.\n")
-            f.write("    Do not output <follow_up_command>.\n")
-            f.write("</response_instructions>\n")
-        else:
-            f.write("<response_instructions>\n")
-            f.write("  You are receiving the specific files you requested.\n")
-            f.write("  Your task is defined in <task>.\n")
-            f.write("  You now have sufficient context. Proceed with your full response.\n")
-            f.write("  Do not ask for additional files.\n")
+            if not es_solicitado:
+                f.write("  You are receiving the full codebase for the project described above.\n")
+                f.write("  Your task is defined in <task>.\n\n")
+                f.write("  STEP 1 — Identify missing context:\n")
+                f.write("    If you need additional files not present in <codebase> to complete\n")
+                f.write("    the task, list each one with a one-sentence reason.\n\n")
+                f.write("  STEP 2 — Provide a follow-up command:\n")
+                f.write("    If additional files are needed, output EXACTLY this block\n")
+                f.write("    (copy-paste ready, no surrounding text):\n\n")
+                f.write("    <follow_up_command>\n")
+                f.write(f"    {cmd_followup}\n")
+                f.write("    </follow_up_command>\n\n")
+                f.write("    Replace the placeholder paths with real relative paths.\n")
+                f.write("    Use forward slashes. Paths are relative to project_root.\n\n")
+                f.write("  STEP 3 — If you already have enough context:\n")
+                f.write("    State that explicitly, then proceed directly with your response.\n")
+                f.write("    Do not output <follow_up_command>.\n")
+            else:
+                f.write("  You are receiving the specific files you requested.\n")
+                f.write("  Your task is defined in <task>.\n")
+                f.write("  You now have sufficient context. Proceed with your full response.\n")
+                f.write("  Do not ask for additional files.\n")
             f.write("</response_instructions>\n")
 
     return _escribir_y_estimar(salida_path, writer, modelo, incluir_en_archivo=False)
-
-
 # ── Preview y Stats ───────────────────────────────────────────────────────────
 
 def mostrar_preview(archivos: list[Path], raiz: Path, config: dict,
