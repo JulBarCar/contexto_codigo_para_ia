@@ -614,13 +614,11 @@ def obtener_ultimos_commits(raiz: Path, n: int = 5) -> list[str]:
     r = subprocess.run(
         ["git", "log", "--oneline", f"-{n}"],
         cwd=raiz, capture_output=True,
-        # Forzar UTF-8 explícito para evitar problemas de encoding en Windows
         encoding="utf-8", errors="replace"
     )
     if r.returncode != 0:
         return []
     lineas = [l.strip() for l in r.stdout.splitlines() if l.strip()]
-    # Intentar corregir doble-encoding (Windows con chcp != 65001)
     return [_fix_encoding(l) for l in lineas]
 
 # ── Ordenación ────────────────────────────────────────────────────────────────
@@ -636,14 +634,323 @@ def _prioridad(archivo: Path) -> tuple:
 def ordenar_archivos(archivos: list[Path]) -> list[Path]:
     return sorted(archivos, key=_prioridad)
 
+# ── Resolución de aliases de módulos ─────────────────────────────────────────
+#
+# Soporta la lectura de aliases desde los siguientes archivos de configuración:
+#
+#   JavaScript / TypeScript
+#   ├── tsconfig.json / tsconfig.base.json   compilerOptions.paths + baseUrl
+#   ├── jsconfig.json                         ídem (proyectos JS sin TS)
+#   ├── vite.config.js / .ts                  resolve.alias
+#   ├── webpack.config.js / .ts               resolve.alias
+#   ├── babel.config.js / .json               plugin module-resolver → alias
+#   ├── .babelrc / .babelrc.js                ídem
+#   ├── nuxt.config.js / .ts                  alias: { ... }
+#   └── jest.config.js / .ts                  moduleNameMapper
+#
+#   Python
+#   ├── pyproject.toml                        [tool.pytest.ini_options] o
+#   │                                         [tool.setuptools] → packages
+#   └── setup.cfg / setup.py                  packages / package_dir
+#       (los imports de Python se resuelven por ruta real, no por alias,
+#        así que esto solo aplica para rutas relativas directas)
+#
+# Nota: Next.js no define aliases propios; delega en tsconfig.paths (ya cubierto).
+# Remix y SvelteKit usan vite.config o tsconfig (ya cubiertos).
+# Astro usa tsconfig.paths (ya cubierto) y opcionalmente vite.config.
+
+def _leer_json_permisivo(texto: str) -> dict:
+    """Lee JSON con comentarios estilo // y /* */ (jsconfig, tsconfig)."""
+    sin_comentarios = re.sub(r"/\*[\s\S]*?\*/", "", texto)
+    sin_comentarios = re.sub(r"//[^\n]*", "", sin_comentarios)
+    try:
+        return json.loads(sin_comentarios)
+    except Exception:
+        return {}
+
+
+def _extraer_aliases_tsconfig(datos: dict, raiz: Path) -> dict[str, Path]:
+    """
+    Extrae compilerOptions.paths de tsconfig.json / jsconfig.json.
+    Ej: "@/*": ["src/*"]  →  "@" → raiz/src
+    También respeta baseUrl para paths relativos.
+    """
+    aliases: dict[str, Path] = {}
+    opts = datos.get("compilerOptions", {})
+    base = (raiz / opts.get("baseUrl", ".")).resolve()
+    for alias_pat, targets in opts.get("paths", {}).items():
+        if not targets:
+            continue
+        # "@/*" → "@",  "~utils" → "~utils"
+        clave    = alias_pat.rstrip("/*").rstrip("/")
+        primera  = targets[0].rstrip("/*").rstrip("/")
+        try:
+            aliases[clave] = (base / primera).resolve()
+        except Exception:
+            pass
+    return aliases
+
+
+def _extraer_aliases_vite(texto: str, raiz: Path) -> dict[str, Path]:
+    """
+    Extrae resolve.alias de vite.config.js/ts.
+    Cubre: '@': path.resolve(__dirname, 'src'),
+           '@': fileURLToPath(new URL('./src', import.meta.url)),
+           '@': '/ruta/absoluta'
+    """
+    aliases: dict[str, Path] = {}
+    patron = re.compile(
+        r"""['"](@[\w/.-]*|~[\w/.-]*|[\w][\w/.-]*)['"]\s*:\s*"""
+        r"""(?:"""
+        r"""(?:path\.resolve|path\.join)\s*\([^,)]*,\s*['"]([^'"]+)['"]"""   # path.resolve(__dirname, 'x')
+        r"""|fileURLToPath\s*\(new\s+URL\s*\(\s*['"]([^'"]+)['"]"""           # fileURLToPath(new URL('./x', ...))
+        r"""|['"]([^'"]+)['"])""",                                             # string literal directo
+        re.MULTILINE,
+    )
+    for m in patron.finditer(texto):
+        alias    = m.group(1)
+        ruta_str = (m.group(2) or m.group(3) or m.group(4) or "").strip("/")
+        if ruta_str:
+            try:
+                aliases[alias] = (raiz / ruta_str).resolve()
+            except Exception:
+                pass
+    return aliases
+
+
+def _extraer_aliases_webpack(texto: str, raiz: Path) -> dict[str, Path]:
+    """
+    Extrae resolve.alias de webpack.config.js/ts.
+    Cubre: '@': path.resolve(__dirname, 'src'),
+           '@': path.join(__dirname, 'src'),
+           '@': '/ruta/absoluta'
+    """
+    aliases: dict[str, Path] = {}
+    patron = re.compile(
+        r"""['"](@[\w/.-]*|~[\w/.-]*|[\w][\w$/-]+)['"]\s*:\s*"""
+        r"""(?:"""
+        r"""(?:path\.resolve|path\.join)\s*\([^,)]*,\s*['"]([^'"]+)['"]"""
+        r"""|['"]([^'"]+)['"])""",
+        re.MULTILINE,
+    )
+    for m in patron.finditer(texto):
+        alias    = m.group(1)
+        ruta_str = (m.group(2) or m.group(3) or "").strip("/")
+        if ruta_str:
+            try:
+                aliases[alias] = (raiz / ruta_str).resolve()
+            except Exception:
+                pass
+    return aliases
+
+
+def _extraer_aliases_nuxt(texto: str, raiz: Path) -> dict[str, Path]:
+    """
+    Extrae alias: { ... } de nuxt.config.js/ts.
+    Nuxt usa ~ y @ como aliases de la raíz por defecto; aquí capturamos
+    los que el usuario define explícitamente.
+    """
+    aliases: dict[str, Path] = {}
+    bloque = re.search(r"\balias\s*:\s*\{([^}]+)\}", texto, re.DOTALL)
+    if not bloque:
+        return aliases
+    patron = re.compile(
+        r"""['"]?([@~][\w/.-]*|[\w][\w/.-]*)['"']?\s*:\s*['"]([^'"]+)['"]"""
+    )
+    for m in patron.finditer(bloque.group(1)):
+        alias    = m.group(1)
+        ruta_str = (m.group(2)
+                    .replace("~", str(raiz))
+                    .replace("<rootDir>", str(raiz))
+                    .replace("__dirname", str(raiz)))
+        try:
+            aliases[alias] = Path(ruta_str).resolve()
+        except Exception:
+            pass
+    return aliases
+
+
+def _extraer_aliases_jest(texto: str, raiz: Path) -> dict[str, Path]:
+    """
+    Extrae moduleNameMapper de jest.config.js/ts.
+    Ej: '^@/(.*)$': '<rootDir>/src/$1'  →  '@' → raiz/src
+    """
+    aliases: dict[str, Path] = {}
+    bloque = re.search(r"moduleNameMapper\s*:\s*\{([^}]+)\}", texto, re.DOTALL)
+    if not bloque:
+        return aliases
+    patron = re.compile(
+        r"""['"]\^?([@~][\w/.-]*?)(?:/\(|\\/).*?['\"]\s*:\s*['"]<rootDir>/([^'"$]*)"""
+    )
+    for m in patron.finditer(bloque.group(1)):
+        alias    = m.group(1)
+        ruta_str = m.group(2).rstrip("/")
+        if ruta_str:
+            try:
+                aliases[alias] = (raiz / ruta_str).resolve()
+            except Exception:
+                pass
+    return aliases
+
+
+def _extraer_aliases_babel(texto: str, raiz: Path) -> dict[str, Path]:
+    """
+    Extrae el bloque alias: { ... } del plugin module-resolver en
+    babel.config.js, .babelrc o equivalentes.
+    """
+    aliases: dict[str, Path] = {}
+    bloque = re.search(r"\balias\s*:\s*\{([^}]+)\}", texto, re.DOTALL)
+    if not bloque:
+        return aliases
+    patron = re.compile(
+        r"""['"]?([@~][\w/.-]*)['"']?\s*:\s*['"]([^'"]+)['"]"""
+    )
+    for m in patron.finditer(bloque.group(1)):
+        alias    = m.group(1)
+        ruta_str = m.group(2).lstrip("./")
+        try:
+            aliases[alias] = (raiz / ruta_str).resolve()
+        except Exception:
+            pass
+    return aliases
+
+
+def cargar_aliases(raiz: Path) -> dict[str, Path]:
+    """
+    Busca archivos de configuración en la raíz del proyecto y extrae los aliases
+    de módulos definidos en cada uno. Devuelve:
+        { alias_prefix: Path_absoluto_a_carpeta_destino }
+
+    La última escritura gana si el mismo alias aparece en varios archivos.
+    Los archivos se leen en orden de prioridad creciente (tsconfig al final
+    porque suele ser la fuente canónica en proyectos TS).
+    """
+    aliases: dict[str, Path] = {}
+
+    # Configs JS con parser de texto plano
+    configs_texto = [
+        ("webpack.config.js",  _extraer_aliases_webpack),
+        ("webpack.config.ts",  _extraer_aliases_webpack),
+        ("nuxt.config.js",     _extraer_aliases_nuxt),
+        ("nuxt.config.ts",     _extraer_aliases_nuxt),
+        ("jest.config.js",     _extraer_aliases_jest),
+        ("jest.config.ts",     _extraer_aliases_jest),
+        ("babel.config.js",    _extraer_aliases_babel),
+        ("babel.config.json",  _extraer_aliases_babel),
+        (".babelrc",           _extraer_aliases_babel),
+        (".babelrc.js",        _extraer_aliases_babel),
+        # Vite al final para que pise webpack si ambos existen
+        ("vite.config.js",     _extraer_aliases_vite),
+        ("vite.config.ts",     _extraer_aliases_vite),
+    ]
+    for nombre, fn in configs_texto:
+        ruta = raiz / nombre
+        if ruta.exists():
+            try:
+                texto = ruta.read_text(encoding="utf-8", errors="replace")
+                aliases.update(fn(texto, raiz))
+            except Exception:
+                pass
+
+    # tsconfig / jsconfig: JSON con comentarios, mayor prioridad
+    for nombre in ("jsconfig.json", "tsconfig.base.json", "tsconfig.json"):
+        ruta = raiz / nombre
+        if ruta.exists():
+            try:
+                datos = _leer_json_permisivo(
+                    ruta.read_text(encoding="utf-8", errors="replace")
+                )
+                aliases.update(_extraer_aliases_tsconfig(datos, raiz))
+            except Exception:
+                pass
+
+    return aliases
+
+
+# ── Resolución de importaciones a rutas de archivo ───────────────────────────
+
+# Extensiones a probar cuando el import no trae extensión explícita
+_EXTENSIONES_RESOLVE = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+                        ".vue", ".svelte", ".astro")
+
+
+def resolver_importacion(
+    imp: str,
+    archivo: Path,
+    raiz: Path,
+    indice_archivos: dict[Path, str],
+    aliases: dict[str, Path],
+) -> str | None:
+    """
+    Resuelve un string de importación a la ruta relativa posix del archivo
+    dentro del proyecto, o None si no se puede resolver internamente.
+
+    Orden de resolución:
+      1. Ruta relativa (empieza con '.' o '..')
+      2. Alias conocido (prefijo más largo que coincida)
+      3. Módulo externo sin alias → None (ignorado)
+
+    Para cada candidato se prueban:
+      - Ruta exacta (si ya tiene extensión)
+      - Ruta + cada extensión de _EXTENSIONES_RESOLVE
+      - Ruta/index + cada extensión (patrón barrel/index)
+    """
+    ruta_candidata: Path | None = None
+
+    if imp.startswith("."):
+        # Ruta relativa al directorio del archivo importador
+        ruta_candidata = (archivo.parent / imp).resolve()
+    else:
+        # Buscar el alias más largo que coincida (evita que '@' pise '@components')
+        mejor_alias: str | None = None
+        mejor_len = 0
+        for prefijo in aliases:
+            if (imp == prefijo or imp.startswith(prefijo + "/")) and len(prefijo) > mejor_len:
+                mejor_alias = prefijo
+                mejor_len   = len(prefijo)
+
+        if mejor_alias is not None:
+            destino = aliases[mejor_alias]
+            resto   = imp[len(mejor_alias):].lstrip("/")
+            ruta_candidata = (destino / resto).resolve() if resto else destino
+
+    if ruta_candidata is None:
+        return None  # módulo externo sin alias conocido, se ignora
+
+    # Búsqueda 1: coincidencia exacta (import con extensión explícita)
+    if ruta_candidata in indice_archivos:
+        return indice_archivos[ruta_candidata]
+
+    # Búsqueda 2: añadir extensión
+    for ext in _EXTENSIONES_RESOLVE:
+        candidato = Path(str(ruta_candidata) + ext)
+        if candidato in indice_archivos:
+            return indice_archivos[candidato]
+
+    # Búsqueda 3: barrel / index file
+    for ext in _EXTENSIONES_RESOLVE:
+        candidato = ruta_candidata / f"index{ext}"
+        if candidato in indice_archivos:
+            return indice_archivos[candidato]
+
+    return None
+
+
 # ── Análisis de importaciones ─────────────────────────────────────────────────
 
 def extraer_importaciones(archivo: Path) -> list[str]:
+    """
+    Devuelve la lista de strings de importación crudos del archivo.
+    Para Python: nombres de módulo de primer nivel.
+    Para JS/TS/JSX/TSX: todos los especificadores de import/require,
+    incluyendo rutas relativas y aliases (sin filtrar por tipo).
+    """
     importaciones = []
     try:
         texto = archivo.read_text(encoding="utf-8", errors="replace")
     except Exception:
         return importaciones
+
     if archivo.suffix == ".py":
         try:
             tree = ast.parse(texto)
@@ -656,14 +963,45 @@ def extraer_importaciones(archivo: Path) -> list[str]:
                         importaciones.append(nodo.module.split(".")[0])
         except SyntaxError:
             pass
-    elif archivo.suffix in {".js", ".ts", ".jsx", ".tsx"}:
+
+    elif archivo.suffix in {".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"}:
+        # Captura import ... from '...', import('...') y require('...')
+        # Sin filtrar por '.' para incluir también aliases (@, ~, etc.)
         patron = re.compile(
-            r"""(?:import|require)\s*(?:.*?from\s*)?['"](\.{1,2}/[^'"]+|[^'"./][^'"]*)['"']""",
+            r"""(?:import|require)\s*(?:.*?from\s*)?['"]([^'"]+)['"]""",
             re.MULTILINE,
         )
         for m in patron.finditer(texto):
             importaciones.append(m.group(1))
+
+    elif archivo.suffix == ".vue":
+        # SFC de Vue: bloque <script> + imports en <template> (via componentes)
+        # Extraemos solo el bloque <script> para analizar imports
+        bloque_script = re.search(
+            r"<script[^>]*>([\s\S]*?)</script>", texto, re.IGNORECASE
+        )
+        if bloque_script:
+            patron = re.compile(
+                r"""(?:import|require)\s*(?:.*?from\s*)?['"]([^'"]+)['"]""",
+                re.MULTILINE,
+            )
+            for m in patron.finditer(bloque_script.group(1)):
+                importaciones.append(m.group(1))
+
+    elif archivo.suffix == ".svelte":
+        # Svelte: bloque <script> en la sección de módulo o instancia
+        for bloque_script in re.finditer(
+            r"<script[^>]*>([\s\S]*?)</script>", texto, re.IGNORECASE
+        ):
+            patron = re.compile(
+                r"""(?:import|require)\s*(?:.*?from\s*)?['"]([^'"]+)['"]""",
+                re.MULTILINE,
+            )
+            for m in patron.finditer(bloque_script.group(1)):
+                importaciones.append(m.group(1))
+
     return list(dict.fromkeys(importaciones))
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -822,6 +1160,35 @@ def escribir_archivo(salida_path: Path, archivos: list[Path], raiz: Path,
     return _escribir_y_estimar(salida_path, writer, modelo, incluir_en_archivo=True)
 
 
+def _construir_grafo(archivos: list[Path], raiz: Path) -> list[tuple[str, list[str]]]:
+    """
+    Construye el grafo de dependencias internas entre los archivos del proyecto.
+
+    Usa resolver_importacion con:
+      - Un índice por ruta absoluta (evita colisiones de stem entre carpetas)
+      - Los aliases leídos desde los archivos de config del proyecto
+
+    Devuelve una lista de (ruta_relativa_posix, [deps_relativas_posix]).
+    Solo incluye archivos que tienen al menos una dependencia interna resuelta.
+    """
+    indice_archivos = {a.resolve(): a.relative_to(raiz).as_posix() for a in archivos}
+    aliases         = cargar_aliases(raiz)
+    dep_lines: list[tuple[str, list[str]]] = []
+
+    for archivo in archivos:
+        importaciones = extraer_importaciones(archivo)
+        deps_internas: list[str] = []
+        for imp in importaciones:
+            resuelto = resolver_importacion(imp, archivo, raiz, indice_archivos, aliases)
+            if resuelto:
+                deps_internas.append(resuelto)
+        if deps_internas:
+            rel = archivo.relative_to(raiz).as_posix()
+            dep_lines.append((rel, deps_internas))
+
+    return dep_lines
+
+
 def escribir_context_only(salida_path: Path, archivos: list[Path],
                            raiz: Path, config: dict, commits: list[str],
                            modelo: str = "default") -> dict | None:
@@ -856,29 +1223,18 @@ def escribir_context_only(salida_path: Path, archivos: list[Path],
             else:
                 f.write("   Importa  : (ninguna detectada)\n")
             f.write("\n")
+
         f.write(f"# {sep}\n# GRAFO DE DEPENDENCIAS INTERNAS\n# {sep}\n\n")
         f.write("# (Muestra qué archivos del proyecto se importan entre sí)\n\n")
-        stems      = {a.stem: str(a.relative_to(raiz)) for a in archivos}
-        tiene_deps = False
-        for archivo in archivos:
-            importaciones = extraer_importaciones(archivo)
-            deps_internas = []
-            for imp in importaciones:
-                if imp.startswith("."):
-                    base  = (archivo.parent / imp).resolve()
-                    clave = base.stem
-                else:
-                    clave = imp.split("/")[-1].split(".")[0]
-                if clave in stems:
-                    deps_internas.append(stems[clave])
-            if deps_internas:
-                tiene_deps = True
-                relativo   = archivo.relative_to(raiz)
-                f.write(f"  {relativo}\n")
-                for d in deps_internas:
+
+        dep_lines = _construir_grafo(archivos, raiz)
+        if dep_lines:
+            for rel, deps in dep_lines:
+                f.write(f"  {rel}\n")
+                for d in deps:
                     f.write(f"    └─ {d}\n")
                 f.write("\n")
-        if not tiene_deps:
+        else:
             f.write("  (No se detectaron dependencias internas entre los archivos incluidos)\n\n")
 
     return _escribir_y_estimar(salida_path, writer, modelo, incluir_en_archivo=True)
@@ -896,8 +1252,8 @@ def escribir_context_only(salida_path: Path, archivos: list[Path],
 # 2. Identifique qué archivos son relevantes para el objetivo
 # 3. Devuelva el follow_up_command con esos archivos
 
-def escribir_mapa_ia(salida_path: Path, archivos: list[Path], raiz: Path,
-                      config: dict, commits: list[str] | None = None,
+def escribir_mapa_ia(salida_path: Path, archivos: list[Path],
+                      raiz: Path, config: dict, commits: list[str] | None = None,
                       modelo: str = "default") -> dict | None:
     """
     Genera un mapa de contexto (sin código) optimizado para ser leído por una IA.
@@ -963,22 +1319,7 @@ def escribir_mapa_ia(salida_path: Path, archivos: list[Path], raiz: Path,
         f.write("</file_index>\n\n")
 
         # ── Grafo de dependencias internas ───────────────────────────────────
-        stems      = {a.stem: str(a.relative_to(raiz)) for a in archivos}
-        dep_lines  = []
-        for archivo in archivos:
-            importaciones = extraer_importaciones(archivo)
-            deps_internas = []
-            for imp in importaciones:
-                if imp.startswith("."):
-                    base  = (archivo.parent / imp).resolve()
-                    clave = base.stem
-                else:
-                    clave = imp.split("/")[-1].split(".")[0]
-                if clave in stems:
-                    deps_internas.append(stems[clave])
-            if deps_internas:
-                rel = archivo.relative_to(raiz).as_posix()
-                dep_lines.append((rel, deps_internas))
+        dep_lines = _construir_grafo(archivos, raiz)
 
         f.write("<dependency_graph>\n")
         if dep_lines:
@@ -1072,7 +1413,7 @@ def escribir_archivo_ia(salida_path: Path, archivos: list[Path], raiz: Path,
         f.write(f"  {objetivo}\n")
         f.write("</task>\n\n")
 
-        # ── Índice de archivos (reemplaza file_tree; solo en primera vuelta) ──
+        # ── Índice de archivos (solo en primera vuelta) ──────────────────────
         if not es_segunda_vuelta:
             f.write("<file_index>\n")
             for archivo in archivos:
