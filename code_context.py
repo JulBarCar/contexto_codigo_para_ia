@@ -39,6 +39,14 @@ OPCIONES CLI:
                             Opciones: claude, gpt-4, gpt-4o, gpt-3.5, gemini,
                                       gemini-pro, llama, mistral, deepseek, default
                             Default: "default" (estimación genérica, sin costo)
+  --comprimir [leve|medio|agresivo]
+                            Elimina comentarios y docstrings antes de escribir los archivos.
+                            Sin argumento usa nivel "medio". Niveles:
+                              leve      → solo elimina comentarios de línea/bloque
+                              medio     → también docstrings de módulo (default)
+                              agresivo  → todos los docstrings + colapsa líneas vacías
+                            Soporta .py .js .ts .jsx .tsx .html .css
+                            Requiere compresor.py en la misma carpeta.
   --ayuda                   Muestra esta ayuda
 
 OPCIONES DISPONIBLES EN .codigo_config.json (pero no como argumento CLI):
@@ -51,6 +59,7 @@ OPCIONES DISPONIBLES EN .codigo_config.json (pero no como argumento CLI):
   nombre_salida_cambios     Nombre del archivo de cambios git.
   nombre_salida_co          Nombre del archivo de mapa de contexto.
   modelo                    Igual que --modelo (la CLI tiene prioridad si se usan ambos).
+  comprimir                 Igual que --comprimir (la CLI tiene prioridad si se usan ambos).
 
   → Las opciones de config sin equivalente CLI (descripcion, extensiones, ignorar,
     incluir_solo, carpeta_salida, nombres de salida) están ahí porque se configuran
@@ -79,6 +88,12 @@ import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
+
+try:
+    from compresor import comprimir_texto, NivelCompresion, EXTENSIONES_SOPORTADAS
+    COMPRESION_DISPONIBLE = True
+except ImportError:
+    COMPRESION_DISPONIBLE = False
 
 # ── Valores por defecto ───────────────────────────────────────────────────────
 
@@ -266,6 +281,7 @@ def parsear_args(argv: list[str]) -> dict:
         "archivos":      None,
         "modelo":        None,
         "continua":      False,
+        "comprimir":     None,
     }
 
     i = 0
@@ -341,6 +357,17 @@ def parsear_args(argv: list[str]) -> dict:
                 sys.exit(1)
             args["archivos"] = archivos_lista
             continue
+        elif tok == "--comprimir":
+            i += 1
+            niveles_validos = ["leve", "medio", "agresivo"]
+            if i >= len(argv) or argv[i].startswith("--"):
+                args["comprimir"] = "medio"
+                continue
+            nivel = argv[i].lower()
+            if nivel not in niveles_validos:
+                print(f"[ERROR] --comprimir acepta: {', '.join(niveles_validos)}")
+                sys.exit(1)
+            args["comprimir"] = nivel
         elif not tok.startswith("--"):
             args["carpeta"] = tok
         else:
@@ -391,6 +418,7 @@ def cargar_config(raiz: Path) -> dict:
         "modelo":                modelo_config,
         "objetivo":              None,
         "archivos_forzados":     None,
+        "comprimir":             overrides.get("comprimir",             None),
     }
 
 
@@ -422,6 +450,7 @@ def generar_config_ejemplo(raiz: Path, limpio: bool = False) -> None:
             "nombre_salida_cambios":"cambios_git.txt",
             "nombre_salida_co":     "mapa_contexto.txt",
             "modelo":               "default",
+            "comprimir":            None,
         }
     else:
         config = {
@@ -485,6 +514,14 @@ def generar_config_ejemplo(raiz: Path, limpio: bool = False) -> None:
                 f"También disponible como --modelo NOMBRE en CLI (CLI tiene prioridad)."
             ),
             "modelo": "default",
+
+            "_comentario_comprimir": (
+                "Nivel de compresión: 'leve', 'medio', 'agresivo', o null para desactivar. "
+                "Elimina comentarios y docstrings antes de escribir el contexto. "
+                "Requiere compresor.py en la misma carpeta. "
+                "También disponible como --comprimir [nivel] en CLI."
+            ),
+            "comprimir": None,
         }
 
     with open(destino, "w", encoding="utf-8") as f:
@@ -702,6 +739,32 @@ def construir_arbol(archivos: list[Path], raiz: Path) -> str:
         lineas.append(f"{'  ' * len(partes)}{partes[-1]}")
     return "\n".join(lineas)
 
+# ── Lectura con compresión opcional ──────────────────────────────────────────
+
+def leer_contenido(archivo: Path, config: dict) -> str:
+    """
+    Lee el contenido de un archivo, aplicando compresión si está activada.
+    Devuelve siempre una string con el contenido listo para escribir.
+    """
+    try:
+        contenido = archivo.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return f"# [No se pudo leer: {e}]\n"
+
+    nivel_str = config.get("comprimir")
+    if not nivel_str or not COMPRESION_DISPONIBLE:
+        return contenido
+
+    if archivo.suffix not in EXTENSIONES_SOPORTADAS:
+        return contenido
+
+    try:
+        resultado = comprimir_texto(contenido, archivo.suffix, NivelCompresion(nivel_str))
+        return resultado["texto"]
+    except Exception:
+        return contenido  # fallback silencioso
+
+
 # ── Escritura: modo estándar ──────────────────────────────────────────────────
 
 def escribir_encabezado(f, config: dict, raiz: Path, titulo: str,
@@ -751,13 +814,10 @@ def escribir_archivo(salida_path: Path, archivos: list[Path], raiz: Path,
         for archivo in archivos:
             relativo = archivo.relative_to(raiz)
             f.write(f"\n\n# --- {relativo} ---\n\n")
-            try:
-                contenido = archivo.read_text(encoding="utf-8", errors="replace")
-                f.write(contenido)
-                if not contenido.endswith("\n"):
-                    f.write("\n")
-            except Exception as e:
-                f.write(f"# [No se pudo leer: {e}]\n")
+            contenido = leer_contenido(archivo, config)
+            f.write(contenido)
+            if not contenido.endswith("\n"):
+                f.write("\n")
 
     return _escribir_y_estimar(salida_path, writer, modelo, incluir_en_archivo=True)
 
@@ -1038,13 +1098,10 @@ def escribir_archivo_ia(salida_path: Path, archivos: list[Path], raiz: Path,
         for archivo in archivos:
             relativo = archivo.relative_to(raiz)
             f.write(f"\n<file path=\"{relativo.as_posix()}\">\n")
-            try:
-                contenido = archivo.read_text(encoding="utf-8", errors="replace")
-                f.write(contenido)
-                if not contenido.endswith("\n"):
-                    f.write("\n")
-            except Exception as e:
-                f.write(f"[READ_ERROR: {e}]\n")
+            contenido = leer_contenido(archivo, config)
+            f.write(contenido)
+            if not contenido.endswith("\n"):
+                f.write("\n")
             f.write(f"</file>\n")
         f.write("\n</codebase>\n\n")
 
@@ -1201,6 +1258,8 @@ def unificar(args: dict) -> None:
         config["objetivo"] = args["objetivo"]
     if args["modelo"] is not None:
         config["modelo"] = args["modelo"]
+    if args.get("comprimir"):
+        config["comprimir"] = args["comprimir"]
     if args["ignorar_extra"]:
         config["ignorar"] = config["ignorar"] | set(args["ignorar_extra"])
 
@@ -1215,6 +1274,11 @@ def unificar(args: dict) -> None:
     print(f"[CONFIG] Salida en: {salida_dir}")
     if modelo != "default":
         print(f"[CONFIG] Modelo    : {MODELOS_TOKENS[modelo]['nombre_display']}")
+    if config.get("comprimir"):
+        if COMPRESION_DISPONIBLE:
+            print(f"[CONFIG] Compresión  : activada  (nivel={config['comprimir']})")
+        else:
+            print("[AVISO]  --comprimir requiere compresor.py en la misma carpeta.")
     if args["ignorar_extra"]:
         print(f"[CONFIG] Ignorando extra: {', '.join(args['ignorar_extra'])}")
 
