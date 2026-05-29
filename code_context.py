@@ -941,65 +941,255 @@ def resolver_importacion(
 def extraer_importaciones(archivo: Path) -> list[str]:
     """
     Devuelve la lista de strings de importación crudos del archivo.
-    Para Python: nombres de módulo de primer nivel.
-    Para JS/TS/JSX/TSX: todos los especificadores de import/require,
-    incluyendo rutas relativas y aliases (sin filtrar por tipo).
+
+    Python:
+      - Imports absolutos: devuelve nombre de módulo de primer nivel.
+      - Imports relativos (level > 0): intenta resolver a ruta real relativa
+        al archivo actual; si no existe en disco, devuelve el especificador
+        con puntos (ej: '..utils.helpers').
+
+    JS/TS/JSX/TSX/MJS/CJS:
+      - import ... from '...'           (incluyendo multilínea con {})
+      - export { ... } from '...'       (re-exports nombrados y default)
+      - export * from '...'             (re-exports de namespace)
+      - import('...')                   (dinámico con string literal)
+      - import(`./prefijo/${var}`)      (dinámico con template literal: extrae prefijo estático)
+      - require('...')                  (CommonJS, incluso con desestructuración)
+      - Comentarios inline /* ... */ en la sentencia son ignorados correctamente.
+
+    Vue/Svelte: igual que JS/TS dentro del bloque <script>.
     """
-    importaciones = []
+    importaciones: list[str] = []
     try:
         texto = archivo.read_text(encoding="utf-8", errors="replace")
     except Exception:
         return importaciones
 
+    # ── Python ────────────────────────────────────────────────────────────────
     if archivo.suffix == ".py":
         try:
             tree = ast.parse(texto)
-            for nodo in ast.walk(tree):
-                if isinstance(nodo, ast.Import):
-                    for alias in nodo.names:
-                        importaciones.append(alias.name.split(".")[0])
-                elif isinstance(nodo, ast.ImportFrom):
-                    if nodo.module:
-                        importaciones.append(nodo.module.split(".")[0])
         except SyntaxError:
-            pass
+            return importaciones
 
+        dir_actual = archivo.parent
+
+        for nodo in ast.walk(tree):
+            if isinstance(nodo, ast.Import):
+                # import os, import os.path  → módulo de primer nivel
+                for alias in nodo.names:
+                    importaciones.append(alias.name.split(".")[0])
+
+            elif isinstance(nodo, ast.ImportFrom):
+                level  = nodo.level   # 0 = absoluto, 1 = '.', 2 = '..', etc.
+                module = nodo.module  # puede ser None en "from . import x"
+
+                if level == 0:
+                    # Absoluto: solo módulo de primer nivel
+                    if module:
+                        importaciones.append(module.split(".")[0])
+                else:
+                    # Relativo: intentar resolver a ruta real
+                    # Subimos (level-1) directorios desde el directorio del archivo
+                    base = dir_actual
+                    for _ in range(level - 1):
+                        base = base.parent
+
+                    if module:
+                        # "from ..utils.helpers import parse_date"
+                        # → base/../utils/helpers  (convertimos '.' en separador)
+                        subpath = Path(*module.split("."))
+                        candidato = base / subpath
+                    else:
+                        # "from . import models"
+                        # Los nombres importados son submódulos directos de base
+                        # Añadimos cada nombre como candidato de archivo/paquete
+                        for alias in nodo.names:
+                            sub = base / alias.name
+                            # ¿es un archivo .py?
+                            if (base / f"{alias.name}.py").exists():
+                                try:
+                                    importaciones.append(
+                                        str((base / f"{alias.name}.py")
+                                            .relative_to(dir_actual))
+                                        .replace("\\", "/")
+                                    )
+                                except ValueError:
+                                    importaciones.append(
+                                        f"{'.' * level}{alias.name}"
+                                    )
+                            # ¿es un paquete?
+                            elif (sub / "__init__.py").exists():
+                                try:
+                                    importaciones.append(
+                                        str(sub.relative_to(dir_actual))
+                                        .replace("\\", "/")
+                                    )
+                                except ValueError:
+                                    importaciones.append(
+                                        f"{'.' * level}{alias.name}"
+                                    )
+                            else:
+                                # No existe en disco; devolvemos especificador legible
+                                importaciones.append(f"{'.' * level}{alias.name}")
+                        continue  # ya procesamos los names, siguiente nodo
+
+                    # Resolver candidato: ¿archivo .py o paquete?
+                    if (Path(str(candidato) + ".py")).exists():
+                        ruta_resuelta = Path(str(candidato) + ".py")
+                    elif (candidato / "__init__.py").exists():
+                        ruta_resuelta = candidato
+                    else:
+                        ruta_resuelta = None
+
+                    if ruta_resuelta is not None:
+                        try:
+                            importaciones.append(
+                                str(ruta_resuelta.relative_to(dir_actual))
+                                .replace("\\", "/")
+                            )
+                        except ValueError:
+                            # Fuera del directorio actual → ruta posix relativa desde raíz
+                            importaciones.append(str(ruta_resuelta).replace("\\", "/"))
+                    else:
+                        # Fallback: especificador con puntos, igual que antes
+                        especificador = "." * level + (module or "")
+                        importaciones.append(especificador)
+
+        return list(dict.fromkeys(importaciones))
+
+    # ── JS / TS / JSX / TSX / MJS / CJS ──────────────────────────────────────
+    # ── Vue y Svelte (solo dentro de <script>) ────────────────────────────────
+
+    if archivo.suffix in {".vue", ".svelte"}:
+        bloques = [
+            m.group(1)
+            for m in re.finditer(r"<script[^>]*>([\s\S]*?)</script>",
+                                 texto, re.IGNORECASE)
+        ]
+        cuerpo = "\n".join(bloques)
     elif archivo.suffix in {".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"}:
-        # Captura import ... from '...', import('...') y require('...')
-        # Sin filtrar por '.' para incluir también aliases (@, ~, etc.)
-        patron = re.compile(
-            r"""(?:import|require)\s*(?:.*?from\s*)?['"]([^'"]+)['"]""",
-            re.MULTILINE,
-        )
-        for m in patron.finditer(texto):
-            importaciones.append(m.group(1))
+        cuerpo = texto
+    else:
+        return importaciones
 
-    elif archivo.suffix == ".vue":
-        # SFC de Vue: bloque <script> + imports en <template> (via componentes)
-        # Extraemos solo el bloque <script> para analizar imports
-        bloque_script = re.search(
-            r"<script[^>]*>([\s\S]*?)</script>", texto, re.IGNORECASE
-        )
-        if bloque_script:
-            patron = re.compile(
-                r"""(?:import|require)\s*(?:.*?from\s*)?['"]([^'"]+)['"]""",
-                re.MULTILINE,
+    # Paso 1 — proteger strings para que los comentarios dentro de ellos
+    # no interfieran con la limpieza posterior.
+    _strings_protegidos: list[str] = []
+
+    def _guardar_string(m: re.Match) -> str:
+        idx = len(_strings_protegidos)
+        _strings_protegidos.append(m.group(0))
+        return f"__STRLIT_{idx}__"
+
+    # Template literals, strings dobles, strings simples
+    _patron_strings = re.compile(
+        r'(`[^`\\]*(?:\\.[^`\\]*)*`)'
+        r'|("(?:[^"\\]|\\.)*")'
+        r"|('(?:[^'\\]|\\.)*')",
+        re.DOTALL,
+    )
+    cuerpo_safe = _patron_strings.sub(_guardar_string, cuerpo)
+
+    # Paso 2 — eliminar comentarios de bloque /* ... */ y de línea //
+    cuerpo_safe = re.sub(r"/\*[\s\S]*?\*/", " ", cuerpo_safe)
+    cuerpo_safe = re.sub(r"//[^\n]*", "", cuerpo_safe)
+
+    # Paso 3 — restaurar strings
+    def _restaurar_string(m: re.Match) -> str:
+        return _strings_protegidos[int(m.group(1))]
+
+    cuerpo_safe = re.sub(r"__STRLIT_(\d+)__", _restaurar_string, cuerpo_safe)
+
+    def _extraer_especificadores_js(cuerpo: str) -> list[str]:
+        """
+        Extrae todos los especificadores de módulo de un fragmento JS/TS.
+        Cubre:
+          • import ... from 'x'                (estático, incluyendo multilínea)
+          • export { ... } from 'x'            (re-export nombrado / default)
+          • export * from 'x'                  (re-export namespace)
+          • import('x')                        (dinámico, string literal)
+          • import(`./pre/${var}`)             (dinámico, template literal)
+          • require('x')  /  require("x")      (CJS, incl. desestructuración)
+        """
+        encontrados: list[str] = []
+
+        # ── 1. import estático + re-exports ───────────────────────────────────
+        #   import ... from 'x'
+        #   export { ... } from 'x'
+        #   export * from 'x'
+        #   export * as ns from 'x'
+        # El bloque entre el keyword y from puede ser multilínea; usamos [\s\S]*?
+        _patron_static = re.compile(
+            r"""
+            (?:
+                # a) import <anything> from 'x'
+                \bimport\b
+                (?:
+                    \s+type\b           # import type (TS)
+                )?
+                \s*
+                (?:
+                    # lado izquierdo: { A, B }, * as ns, DefaultExport, combinaciones
+                    [\s\S]*?
+                )?
+                \bfrom\b
+            |
+                # b) export { ... } from 'x'  /  export * from 'x'
+                \bexport\b
+                (?:\s+type\b)?          # export type (TS)
+                \s*
+                (?:\{[\s\S]*?\}|\*)
+                (?:\s+as\s+\w+)?
+                \s*
+                \bfrom\b
             )
-            for m in patron.finditer(bloque_script.group(1)):
-                importaciones.append(m.group(1))
-
-    elif archivo.suffix == ".svelte":
-        # Svelte: bloque <script> en la sección de módulo o instancia
-        for bloque_script in re.finditer(
-            r"<script[^>]*>([\s\S]*?)</script>", texto, re.IGNORECASE
-        ):
-            patron = re.compile(
-                r"""(?:import|require)\s*(?:.*?from\s*)?['"]([^'"]+)['"]""",
-                re.MULTILINE,
+            \s*
+            (?:
+                ['"]([^'"]+)['"]        # grupo 1: string simple/doble
             )
-            for m in patron.finditer(bloque_script.group(1)):
-                importaciones.append(m.group(1))
+            """,
+            re.VERBOSE | re.DOTALL,
+        )
+        for m in _patron_static.finditer(cuerpo):
+            especificador = m.group(1)
+            if especificador:
+                encontrados.append(especificador)
 
+        # ── 2. import side-effect:  import './reset.css' ──────────────────────
+        _patron_side = re.compile(
+            r"""\bimport\s+['"]([^'"]+)['"]"""
+        )
+        for m in _patron_side.finditer(cuerpo):
+            encontrados.append(m.group(1))
+
+        # ── 3. import() dinámico con string literal ───────────────────────────
+        _patron_dyn_str = re.compile(
+            r"""\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)"""
+        )
+        for m in _patron_dyn_str.finditer(cuerpo):
+            encontrados.append(m.group(1))
+
+        # ── 4. import() dinámico con template literal  `./pre/${var}` ─────────
+        # Extraemos la parte estática anterior al primer ${
+        _patron_dyn_tpl = re.compile(
+            r"""\bimport\s*\(\s*`([^`$]*)\$\{"""
+        )
+        for m in _patron_dyn_tpl.finditer(cuerpo):
+            prefijo = m.group(1)  # ej: "./plugins/"
+            if prefijo:  # solo si hay algo que resolver
+                encontrados.append(prefijo)
+
+        # ── 5. require('x') — CJS ────────────────────────────────────────────
+        _patron_require = re.compile(
+            r"""\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)"""
+        )
+        for m in _patron_require.finditer(cuerpo):
+            encontrados.append(m.group(1))
+
+        return encontrados
+
+    importaciones = _extraer_especificadores_js(cuerpo_safe)
     return list(dict.fromkeys(importaciones))
 
 
@@ -1791,3 +1981,146 @@ def unificar(args: dict) -> None:
 if __name__ == "__main__":
     args = parsear_args(sys.argv[1:])
     unificar(args)
+
+# ── Tests de extraer_importaciones ───────────────────────────────────────────
+
+def _test_extraer_importaciones() -> None:
+    """
+    Tests unitarios para extraer_importaciones().
+    Ejecutar con:
+      python -c "from code_context import _test_extraer_importaciones; _test_extraer_importaciones()"
+    """
+    import tempfile, os, textwrap
+
+    def _archivo_tmp(contenido: str, sufijo: str, directorio=None) -> Path:
+        fd, ruta = tempfile.mkstemp(suffix=sufijo, dir=directorio)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(textwrap.dedent(contenido))
+        return Path(ruta)
+
+    archivos_tmp: list[Path] = []
+
+    try:
+        # ── CASO 1: Import multilínea JS ─────────────────────────────────────
+        c1 = _archivo_tmp("""
+import {
+  ComponenteA,
+  ComponenteB,
+} from '../components'
+""", ".js")
+        archivos_tmp.append(c1)
+        r1 = extraer_importaciones(c1)
+        assert "../components" in r1, (
+            f"CASO 1 (multilínea JS): esperaba '../components', obtuve {r1}"
+        )
+        print("✓ CASO 1 — import multilínea JS")
+
+        # ── CASO 2: Re-exports ────────────────────────────────────────────────
+        c2 = _archivo_tmp("""
+export { default } from './Modal'
+export * from './utils'
+export { foo } from "@/helpers"
+""", ".ts")
+        archivos_tmp.append(c2)
+        r2 = extraer_importaciones(c2)
+        assert "./Modal"   in r2, f"CASO 2a: esperaba './Modal', obtuve {r2}"
+        assert "./utils"   in r2, f"CASO 2b: esperaba './utils', obtuve {r2}"
+        assert "@/helpers" in r2, f"CASO 2c: esperaba '@/helpers', obtuve {r2}"
+        print("✓ CASO 2 — re-exports (default / * / nombrado)")
+
+        # ── CASO 3: Import dinámico con template literal ──────────────────────
+        c3 = _archivo_tmp("""
+const mod = await import(`./plugins/${nombre}`)
+""", ".js")
+        archivos_tmp.append(c3)
+        r3 = extraer_importaciones(c3)
+        assert "./plugins/" in r3, (
+            f"CASO 3 (template literal dinámico): esperaba './plugins/', obtuve {r3}"
+        )
+        print("✓ CASO 3 — import() dinámico con template literal")
+
+        # ── CASO 4: Import side-effect ────────────────────────────────────────
+        c4 = _archivo_tmp("""
+import './reset.css'
+import './globals.css'
+""", ".js")
+        archivos_tmp.append(c4)
+        r4 = extraer_importaciones(c4)
+        assert "./reset.css"   in r4, f"CASO 4a: esperaba './reset.css', obtuve {r4}"
+        assert "./globals.css" in r4, f"CASO 4b: esperaba './globals.css', obtuve {r4}"
+        print("✓ CASO 4 — import side-effect")
+
+        # ── CASO 5: require() con desestructuración ───────────────────────────
+        c5 = _archivo_tmp("""
+const { x } = require('../lib/x')
+const path = require('path')
+""", ".js")
+        archivos_tmp.append(c5)
+        r5 = extraer_importaciones(c5)
+        assert "../lib/x" in r5, f"CASO 5a: esperaba '../lib/x', obtuve {r5}"
+        assert "path"     in r5, f"CASO 5b: esperaba 'path', obtuve {r5}"
+        print("✓ CASO 5 — require() con desestructuración")
+
+        # ── CASO 6: Import con comentario inline /* ... */ ────────────────────
+        c6 = _archivo_tmp("""
+import foo from /* webpackChunkName: "foo" */ '../foo'
+""", ".ts")
+        archivos_tmp.append(c6)
+        r6 = extraer_importaciones(c6)
+        assert "../foo" in r6, (
+            f"CASO 6 (comentario inline): esperaba '../foo', obtuve {r6}"
+        )
+        print("✓ CASO 6 — import con comentario inline /* ... */")
+
+        # ── CASO 7: Imports relativos Python con subpaquetes ──────────────────
+        with tempfile.TemporaryDirectory() as tmpdir:
+            td = Path(tmpdir)
+            (td / "pkg").mkdir()
+            (td / "pkg" / "__init__.py").write_text("")
+            (td / "pkg" / "models.py").write_text("")
+            (td / "pkg" / "utils").mkdir()
+            (td / "pkg" / "utils" / "__init__.py").write_text("")
+            (td / "pkg" / "utils" / "helpers.py").write_text("")
+            (td / "pkg" / "sub").mkdir()
+            (td / "pkg" / "sub" / "__init__.py").write_text("")
+
+            vista_py = td / "pkg" / "sub" / "vista.py"
+            vista_py.write_text(textwrap.dedent("""
+from ..utils.helpers import parse_date
+from . import models
+"""))
+            r7 = extraer_importaciones(vista_py)
+
+            helpers_match = any("utils" in s and "helpers" in s for s in r7)
+            assert helpers_match, (
+                f"CASO 7a (from ..utils.helpers): ningún especificador contiene "
+                f"'utils/helpers', obtuve {r7}"
+            )
+            models_match = any("models" in s for s in r7)
+            assert models_match, (
+                f"CASO 7b (from . import models): ningún especificador contiene "
+                f"'models', obtuve {r7}"
+            )
+        print("✓ CASO 7 — imports relativos Python con resolución a ruta real")
+
+        # ── EXTRA: deduplicación ──────────────────────────────────────────────
+        c_dup = _archivo_tmp("""
+import A from './a'
+import B from './a'
+import C from './b'
+""", ".js")
+        archivos_tmp.append(c_dup)
+        r_dup = extraer_importaciones(c_dup)
+        assert r_dup.count("./a") == 1, (
+            f"DEDUP: './a' debería aparecer 1 vez, obtuve {r_dup}"
+        )
+        print("✓ EXTRA  — deduplicación de especificadores")
+
+        print("\n[OK] Todos los tests pasaron.")
+
+    finally:
+        for p in archivos_tmp:
+            try:
+                p.unlink()
+            except Exception:
+                pass
