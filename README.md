@@ -60,6 +60,35 @@ El resultado queda en `.codigo_completo/` dentro del proyecto.
 
 ---
 
+## 🌐 Lenguajes Soportados y Estrategia de Fallback
+
+El script cuenta con un sistema de análisis altamente especializado que adapta su comportamiento según el lenguaje del archivo.
+
+### 🔹 1. Extracción de Importaciones y Dependencias (Mapa Estructural)
+
+Para la generación del árbol de dependencias (`--co` y mapas de contexto), el script cuenta con soporte nativo avanzado para los siguientes entornos:
+
+- **Producción:** Python (`.py`), JavaScript/TypeScript (`.js`, `.ts`, `.jsx`, `.tsx`, `.mjs`, `.cjs`), Vue (`.vue` con soporte Nuxt/Vite), Svelte (`.svelte`).
+- **Backend y Sistemas:** Go (`.go` analizando `go.mod`), C/C++ (`.c`, `.cpp` analizando `CMakeLists.txt`), C# (`.cs` con usings globales), Java/Kotlin/Scala (analizando layouts de Gradle/SBT), Rust (`.rs`), PHP (`.php`), Ruby (`.rb`), Swift (`.swift`), Dart (`.dart`), R (`.R`) y Shell Scripts (`.sh`, `.bash`, `.zsh`).
+
+**Estrategia Fallback / Merge Best-Effort:** Si procesas un archivo cuya extensión no está mapeada en ninguna estrategia específica, el script activa el modo `merge_fallback`. En este modo, el archivo se somete al análisis cooperativo de todas las estrategias existentes y sus hallazgos se fusionan de forma automática, garantizando que si el lenguaje comparte convenciones universales (como strings de rutas o palabras clave), la dependencia sea capturada en el mapa estructural.
+
+### ⚠️ 2. Compresión Inteligente de Código (`--comprimir`)
+
+A diferencia del mapeo de dependencias, la eliminación de comentarios y docstrings requiere un análisis sintáctico estricto. Actualmente, el soporte estable para compresión está restringido a:
+
+- **Python** (vía AST y Tokenizer nativo de la biblioteca estándar)
+- **JavaScript / TypeScript / JSX / TSX** (vía expresiones regulares calibradas)
+- **HTML / CSS** (vía limpieza de bloques de comentarios)
+
+_Para cualquier otro lenguaje no listado aquí, el código fuente se incluirá de forma **íntegra y en texto plano** en el codebase final sin alterar su contenido (omitiendo la fase de compresión para evitar corrupciones de sintaxis)._
+
+### ⚙️ Nota sobre el escaneo inicial
+
+Por seguridad y velocidad, la configuración por defecto de la CLI limita el escaneo a extensiones Web y Python (`.py`, `.js`, `.ts`, etc.). Para procesar proyectos de Go, Rust, C#, o cualquier otro lenguaje listado en las estrategias de importación, recordá inicializar tu configuración con `contexto . --init` y añadir las extensiones correspondientes en el campo `"extensiones"` de tu `.codigo_config.json`.
+
+---
+
 ## 🧠 Uso
 
 ### Sintaxis general
