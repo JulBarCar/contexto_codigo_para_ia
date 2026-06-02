@@ -9,6 +9,15 @@ OPCIONES CLI:
   --init                    Genera .codigo_config.json de ejemplo con comentarios
   --init --limpio           Genera .codigo_config.json mínimo, sin comentarios
   --co                      Solo contexto: árbol + dependencias + fichas, sin código
+                            (formato texto plano, optimizado para IAs)
+  --md                      Genera un archivo Markdown amigable para humanos.
+                            Incluye árbol, fichas, dependencias, commits y tokens.
+                            Sin código fuente. Ideal para GitHub, Obsidian o Notion.
+  --latex                   Genera un archivo LaTeX amigable para humanos.
+                            Portada automática, cajas tcolorbox, tablas booktabs.
+                            Sin código fuente. Intenta compilar a PDF automáticamente
+                            con pdflatex. Si no está disponible, guarda el .tex y
+                            muestra instrucciones de instalación en la terminal.
   --solo-cambios            Solo genera el archivo de cambios git
   --limite N                Omite archivos con más de N líneas (default: sin límite)
   --sin-minimos             Omite lockfiles, *.min.js, migraciones auto-numeradas, etc.
@@ -49,6 +58,8 @@ def parsear_args(argv: list[str]) -> dict:
         "init":          False,
         "init_limpio":   False,
         "co":            False,
+        "md":            False,
+        "latex":         False,
         "solo_cambios":  False,
         "limite":        None,
         "sin_minimos":   False,
@@ -75,6 +86,10 @@ def parsear_args(argv: list[str]) -> dict:
             args["init_limpio"] = True
         elif tok == "--co":
             args["co"] = True
+        elif tok == "--md":
+            args["md"] = True
+        elif tok == "--latex":
+            args["latex"] = True
         elif tok == "--solo-cambios":
             args["solo_cambios"] = True
         elif tok == "--sin-minimos":
@@ -153,4 +168,4 @@ def parsear_args(argv: list[str]) -> dict:
             print(f"[AVISO] Argumento desconocido: '{tok}'. Usa --ayuda para ver opciones.")
         i += 1
 
-    return args
+    return args 

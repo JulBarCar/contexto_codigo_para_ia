@@ -1,0 +1,133 @@
+<context_metadata>
+  generated_at: 2026-06-01T16:14:27
+  project_root: C:\Users\julia\OneDrive\Documentos\contexto_codigo_para_ia
+  file_count: 37
+  extensions_included: .css, .html, .js, .jsx, .py, .ts, .tsx
+  content_type: structure_only (no source code)
+  recent_commits:
+    - ec62322 modularizacion estable dle proyecto, y implementación de strategie es para mapa de imports
+    - 677c7f1 modularizacion estable dle proyecto, y implementación de strategie es para mapa de imports
+    - 089aff9 Merge branch 'main' of https://github.com/JulBarCar/contexto_codigo_para_ia unificar trabajo desde ambos puntos
+    - ed00489 prijmer paso hacia estructura modular
+    - 81e3179 acutalizacion de la generacion del imports tree
+</context_metadata>
+
+<task>
+  aplicar los comandos --md y --latex de ecritura amigable para el usuario/humano
+</task>
+
+<file_tree>
+contexto_codigo_para_ia/
+  code_context.py
+  modules/
+    __init__.py
+    ai.py
+    cli.py
+    compresor.py
+    git.py
+    imports/
+      core.py
+    config/
+      defaults.py
+    filesystem/
+      filters.py
+    output/
+      human_writers.py
+      loader.py
+    aliases/
+      loaders.py
+      log.py
+      ordering.py
+      preview.py
+      resolver.py
+      tree_builder.py
+      writers.py
+      strategies/
+        __init__.py
+        base.py
+        c_strategy.py
+        csharp_strategy.py
+        dart_strategy.py
+        go_strategy.py
+        java_strategy.py
+        js_strategy.py
+        kotlin_strategy.py
+        php_strategy.py
+        python_strategy.py
+        r_strategy.py
+        ruby_strategy.py
+        rust_strategy.py
+        scala_strategy.py
+        shell_strategy.py
+        svelte_strategy.py
+        swift_strategy.py
+        vue_strategy.py
+</file_tree>
+
+<file_index>
+  <file path="code_context.py" lines="275" ext=".py" imports="sys, pathlib, modules" />
+  <file path="modules/__init__.py" lines="0" ext=".py" />
+  <file path="modules/ai.py" lines="140" ext=".py" imports="re" />
+  <file path="modules/cli.py" lines="156" ext=".py" imports="sys, modules" />
+  <file path="modules/compresor.py" lines="315" ext=".py" imports="ast, io, re, sys, tokenize, enum, pathlib, argparse" />
+  <file path="modules/git.py" lines="62" ext=".py" imports="subprocess, pathlib" />
+  <file path="modules/imports/core.py" lines="296" ext=".py" imports="pathlib, modules, strategies" />
+  <file path="modules/config/defaults.py" lines="51" ext=".py" imports="re" />
+  <file path="modules/filesystem/filters.py" lines="100" ext=".py" imports="pathlib, modules" />
+  <file path="modules/output/human_writers.py" lines="845" ext=".py" imports="datetime, pathlib, modules" />
+  <file path="modules/config/loader.py" lines="168" ext=".py" imports="json, pathlib, modules" />
+  <file path="modules/aliases/loaders.py" lines="223" ext=".py" imports="json, re, pathlib" />
+  <file path="modules/output/log.py" lines="27" ext=".py" imports="pathlib" />
+  <file path="modules/filesystem/ordering.py" lines="20" ext=".py" imports="pathlib, modules" />
+  <file path="modules/output/preview.py" lines="82" ext=".py" imports="pathlib, modules" />
+  <file path="modules/aliases/resolver.py" lines="67" ext=".py" imports="pathlib" />
+  <file path="modules/output/tree_builder.py" lines="21" ext=".py" imports="pathlib" />
+  <file path="modules/output/writers.py" lines="367" ext=".py" imports="datetime, pathlib, modules" />
+  <file path="modules/imports/strategies/__init__.py" lines="88" ext=".py" imports="base.py, js_strategy.py, python_strategy.py, svelte_strategy.py, vue_strategy.py, java_strategy.py, csharp_strategy.py, go_strategy.py, rust_strategy.py, php_strategy.py, ruby_strategy.py, kotlin_strategy.py, swift_strategy.py, c_strategy.py, scala_strategy.py (+3)" />
+  <file path="modules/imports/strategies/base.py" lines="37" ext=".py" imports="abc, pathlib" />
+  <file path="modules/imports/strategies/c_strategy.py" lines="345" ext=".py" imports="re, functools, pathlib, base.py" />
+  <file path="modules/imports/strategies/csharp_strategy.py" lines="156" ext=".py" imports="re, pathlib, base.py" />
+  <file path="modules/imports/strategies/dart_strategy.py" lines="85" ext=".py" imports="re, pathlib, base.py" />
+  <file path="modules/imports/strategies/go_strategy.py" lines="141" ext=".py" imports="re, functools, pathlib, base.py" />
+  <file path="modules/imports/strategies/java_strategy.py" lines="146" ext=".py" imports="re, functools, pathlib, base.py" />
+  <file path="modules/imports/strategies/js_strategy.py" lines="153" ext=".py" imports="re, pathlib, base.py" />
+  <file path="modules/imports/strategies/kotlin_strategy.py" lines="127" ext=".py" imports="re, functools, pathlib, base.py" />
+  <file path="modules/imports/strategies/php_strategy.py" lines="186" ext=".py" imports="json, re, functools, pathlib, base.py" />
+  <file path="modules/imports/strategies/python_strategy.py" lines="123" ext=".py" imports="ast, pathlib, base.py" />
+  <file path="modules/imports/strategies/r_strategy.py" lines="169" ext=".py" imports="json, re, functools, pathlib, base.py" />
+  <file path="modules/imports/strategies/ruby_strategy.py" lines="168" ext=".py" imports="re, functools, pathlib, base.py" />
+  <file path="modules/imports/strategies/rust_strategy.py" lines="161" ext=".py" imports="re, pathlib, base.py" />
+  <file path="modules/imports/strategies/scala_strategy.py" lines="155" ext=".py" imports="re, pathlib, base.py" />
+  <file path="modules/imports/strategies/shell_strategy.py" lines="131" ext=".py" imports="re, pathlib, base.py" />
+  <file path="modules/imports/strategies/svelte_strategy.py" lines="192" ext=".py" imports="re, functools, pathlib, js_strategy.py" />
+  <file path="modules/imports/strategies/swift_strategy.py" lines="212" ext=".py" imports="re, functools, pathlib, base.py" />
+  <file path="modules/imports/strategies/vue_strategy.py" lines="230" ext=".py" imports="re, functools, pathlib, js_strategy.py" />
+</file_index>
+
+<dependency_graph>
+  <!-- no internal dependencies detected -->
+</dependency_graph>
+
+<response_instructions>
+  You are receiving the structural map of a codebase (no source code).
+  Your task is defined in <task>.
+
+  STEP 1 — Analyze the structure:
+    Use <file_tree>, <file_index>, and <dependency_graph> to understand
+    the project layout, module sizes, and how files relate to each other.
+
+  STEP 2 — Identify relevant files:
+    Based on the structure and your task, determine which files you need
+    to read to provide a complete and accurate response.
+
+  STEP 3 — Output the follow-up command:
+    Output EXACTLY this block (copy-paste ready, no surrounding text),
+    replacing the placeholders with the actual file paths you need:
+
+    <follow_up_command>
+    contexto C:\Users\julia\OneDrive\Documentos\contexto_codigo_para_ia --objetivo "aplicar los comandos --md y --latex de ecritura amigable para el usuario/humano" --archivos [ruta/archivo1] [ruta/archivo2] ...
+    </follow_up_command>
+
+    Use forward slashes. Paths are relative to project_root.
+    Be selective — only request files genuinely needed for the task.
+</response_instructions>

@@ -3,12 +3,14 @@ code_context.py
 Recorre la carpeta del proyecto y unifica todos los archivos de código
 en un único archivo de texto, listo para pasar a una IA.
 
-Genera hasta cinco archivos:
+Genera hasta siete archivos:
   1. contexto_codigo.txt          → todo el proyecto
   2. cambios_git.txt              → solo archivos modificados desde el último pull
   3. mapa_contexto.txt            → con --co: árbol + dependencias, sin código
   4. ia_[objetivo]_contexto.txt   → con --objetivo: contexto optimizado para IA
   5. ia_[objetivo]_solicitado.txt → con --objetivo + --archivos: archivos pedidos por IA
+  6. mapa_contexto.md             → con --md: documento Markdown amigable para humanos
+  7. mapa_contexto.tex / .pdf     → con --latex: documento LaTeX (compila a PDF si hay pdflatex)
 
 Configuración opcional: crea '.codigo_config.json' en la raíz del proyecto.
 Si no existe, funciona con los valores por defecto.
@@ -30,13 +32,14 @@ Estructura del proyecto:
     aliases/
       loaders.py                ← lectura de aliases (tsconfig, vite, webpack...)
       resolver.py               ← resolución de imports a rutas reales
-    import_analysis/
+    imports/
       core.py                   ← extracción de imports y grafo de dependencias
     output/
       tree_builder.py           ← árbol visual de archivos
       log.py                    ← logging de resultados [OK]
       preview.py                ← modos --preview y --stats
       writers.py                ← escritura de todos los archivos de salida
+      human_writers.py          ← escritura Markdown y LaTeX para humanos
 """
 
 import sys
@@ -56,6 +59,7 @@ from modules.output.writers import (
 )
 from modules.output.preview import mostrar_preview, mostrar_stats
 from modules.output.log import _log_ok
+from modules.output.human_writers import escribir_markdown, escribir_latex, compilar_latex
 
 try:
     from modules.compresor import comprimir_texto  # noqa: F401 — valida disponibilidad
@@ -199,6 +203,32 @@ def unificar(args: dict) -> None:
             print(f"         Úsalo para decidir qué archivos pasarle a la IA.")
             print(f"         Luego ejecuta el script indicando solo esas carpetas en 'incluir_solo'")
             print(f"         o usa --solo-cambios si trabajas con git.")
+        return
+
+    # ── Modo --md / --latex ────────────────────────────────────────────────────
+    if args["md"] or args["latex"]:
+        commits = obtener_ultimos_commits(raiz)
+
+        if args["md"]:
+            if con_objetivo:
+                nombre_md = objetivo_a_slug(config["objetivo"], "mapa").replace(".txt", ".md")
+            else:
+                nombre_md = "mapa_contexto.md"
+            salida_md = salida_dir / nombre_md
+            est = escribir_markdown(salida_md, todos, raiz, config, commits, modelo)
+            _log_ok("Mapa Markdown     ", salida_md, len(todos), est)
+            print(f"         (sin código fuente, apto para leer en GitHub/Obsidian)")
+
+        if args["latex"]:
+            if con_objetivo:
+                nombre_tex = objetivo_a_slug(config["objetivo"], "mapa").replace(".txt", ".tex")
+            else:
+                nombre_tex = "mapa_contexto.tex"
+            salida_tex = salida_dir / nombre_tex
+            est = escribir_latex(salida_tex, todos, raiz, config, commits, modelo)
+            _log_ok("Mapa LaTeX        ", salida_tex, len(todos), est)
+            compilar_latex(salida_tex)
+
         return
 
     # ── Modo --objetivo: contexto completo optimizado para IA ─────────────────

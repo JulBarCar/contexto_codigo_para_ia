@@ -1,0 +1,843 @@
+\documentclass[12pt, a4paper]{report}
+
+% ── Codificación y fuentes ────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+
+% ── Idioma ────────────────────────────────────────────────────────────────────
+\usepackage[spanish]{babel}
+
+% ── Geometría de página ───────────────────────────────────────────────────────
+\usepackage[
+  top=2.5cm, bottom=2.5cm,
+  left=3cm,  right=2.5cm,
+  headheight=14pt
+]{geometry}
+
+% ── Colores ───────────────────────────────────────────────────────────────────
+\usepackage[dvipsnames, table]{xcolor}
+
+% Paleta de colores del tema
+\definecolor{primary}{HTML}{1a1a2e}
+\definecolor{accent}{HTML}{e94560}
+\definecolor{secondary}{HTML}{16213e}
+\definecolor{light}{HTML}{f5f5f5}
+\definecolor{codebg}{HTML}{1e1e2e}
+\definecolor{codefg}{HTML}{cdd6f4}
+\definecolor{tablehead}{HTML}{0f3460}
+\definecolor{tablerow}{HTML}{eef2ff}
+\definecolor{success}{HTML}{40bf77}
+\definecolor{warning}{HTML}{f5a623}
+\definecolor{danger}{HTML}{e94560}
+\definecolor{muted}{HTML}{6b7280}
+\definecolor{border}{HTML}{d1d5db}
+
+% ── Tipografía ────────────────────────────────────────────────────────────────
+\usepackage{fontawesome5}
+\usepackage{setspace}
+\setstretch{1.15}
+
+% ── Tablas ───────────────────────────────────────────────────────────────────
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{makecell}
+
+% ── Cajas y marcos ───────────────────────────────────────────────────────────
+\usepackage[most]{tcolorbox}
+\tcbuselibrary{listings, breakable, skins}
+
+% Caja de código estilo terminal oscura
+\newtcolorbox{terminalbox}[1][]{
+  enhanced,
+  breakable,
+  colback=codebg,
+  colframe=accent,
+  coltitle=white,
+  fonttitle=\bfseries\small,
+  title={#1},
+  arc=4pt,
+  boxrule=0.8pt,
+  left=6pt, right=6pt, top=4pt, bottom=4pt,
+  attach boxed title to top left={yshift=-2.5mm, xshift=6mm},
+  boxed title style={
+    colback=accent, arc=3pt, boxrule=0pt,
+    left=4pt, right=4pt, top=1pt, bottom=1pt
+  },
+}
+
+% Caja informativa para fichas de archivo
+\newtcolorbox{fichabox}[1][]{
+  enhanced,
+  breakable,
+  colback=light,
+  colframe=primary,
+  coltitle=white,
+  fonttitle=\bfseries\ttfamily\small,
+  title={#1},
+  arc=3pt,
+  boxrule=0.6pt,
+  left=8pt, right=8pt, top=4pt, bottom=4pt,
+  attach boxed title to top left={yshift=-2.5mm, xshift=6mm},
+  boxed title style={
+    colback=primary, arc=2pt, boxrule=0pt,
+    left=5pt, right=5pt, top=1.5pt, bottom=1.5pt
+  },
+}
+
+% Caja de sección destacada
+\newtcolorbox{sectionbox}[1][]{
+  enhanced,
+  colback=secondary!8,
+  colframe=secondary,
+  fonttitle=\bfseries,
+  title={#1},
+  arc=2pt,
+  boxrule=0.5pt,
+  left=6pt, right=6pt,
+}
+
+% ── Código fuente ────────────────────────────────────────────────────────────
+\usepackage{fancyvrb}
+\usepackage{listings}
+
+% Configuración de listings para el árbol de archivos
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=none,
+  breaklines=true,
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space},
+}
+
+% ── Encabezados y pies de página ─────────────────────────────────────────────
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textcolor{muted}{\faIcon{folder-open}\ contexto\_codigo\_para\_ia}}
+\fancyhead[R]{\small\textcolor{muted}{\leftmark}}
+\fancyfoot[C]{\small\textcolor{muted}{\thepage}}
+\renewcommand{\headrulewidth}{0.3pt}
+\renewcommand{\footrulewidth}{0pt}
+\renewcommand{\headrule}{\color{border}\hrule width\headwidth height\headrulewidth}
+
+% ── Títulos de sección ────────────────────────────────────────────────────────
+\usepackage{titlesec}
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries\color{primary}}
+  {\textcolor{accent}{\chaptertitlename\ \thechapter}}
+  {16pt}
+  {\Huge}
+\titleformat{\section}
+  {\normalfont\Large\bfseries\color{secondary}}
+  {\textcolor{accent}{\thesection}}
+  {1em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries\color{primary!80}}
+  {\thesubsection}
+  {0.8em}{}
+
+% ── Hiperlinks ────────────────────────────────────────────────────────────────
+\usepackage[
+  colorlinks=true,
+  linkcolor=accent,
+  urlcolor=accent,
+  citecolor=secondary
+]{hyperref}
+
+% ── Misceláneos ───────────────────────────────────────────────────────────────
+\usepackage{parskip}
+\usepackage{enumitem}
+\setlist{noitemsep, topsep=4pt}
+
+% ── Metadatos PDF ─────────────────────────────────────────────────────────────
+\hypersetup{
+  pdftitle={Documentación: contexto\_codigo\_para\_ia},
+  pdfauthor={code\_context},
+  pdfsubject={Contexto del proyecto},
+}
+
+\begin{document}
+
+\begin{titlepage}
+  \pagecolor{primary}
+  \color{white}
+  \centering
+  \vspace*{3cm}
+
+  % Ícono grande
+  {\fontsize{72}{72}\selectfont\textcolor{accent}{\faIcon{folder-open}}}
+
+  \vspace{1.5cm}
+
+  % Nombre del proyecto
+  {\fontsize{36}{40}\selectfont\bfseries contexto\_codigo\_para\_ia}
+
+  \vspace{0.5cm}
+  \textcolor{accent}{\rule{8cm}{1.5pt}}
+  \vspace{0.5cm}
+
+  % Metadata
+  \begin{tcolorbox}[
+    enhanced,
+    colback=white!10,
+    colframe=white!30,
+    arc=4pt,
+    boxrule=0.5pt,
+    width=10cm,
+    halign=center,
+  ]
+    \small
+    \faIcon{calendar-alt}\ \textbf{Generado:} 2026-06-01 16:31:28 \\[4pt]
+    \faIcon{code}\ \textbf{Archivos:} 37 \\[4pt]
+    \faIcon{folder}\ \textbf{Raíz:} \texttt{C:\textbackslash\{\}Users\textbackslash\{\}julia\textbackslash\{\}OneDrive\textbackslash\{\}Documentos\textbackslash\{\}contexto\_codigo\_para\_ia}
+  \end{tcolorbox}
+
+  \vfill
+  \textcolor{white!60}{\small Generado con \texttt{code\_context}}
+\end{titlepage}
+\nopagecolor
+
+\tableofcontents
+\clearpage
+
+\chapter{Árbol de Archivos}
+
+\begin{terminalbox}[\faIcon{sitemap}\ Estructura del proyecto]
+\begin{Verbatim}[fontsize=\small, commandchars=\\\{\}]
+contexto_codigo_para_ia/
+  code_context.py
+  modules/
+    __init__.py
+    ai.py
+    cli.py
+    compresor.py
+    git.py
+    imports/
+      core.py
+    config/
+      defaults.py
+    filesystem/
+      filters.py
+    output/
+      human_writers.py
+      loader.py
+    aliases/
+      loaders.py
+      log.py
+      ordering.py
+      preview.py
+      resolver.py
+      tree_builder.py
+      writers.py
+      strategies/
+        __init__.py
+        base.py
+        c_strategy.py
+        csharp_strategy.py
+        dart_strategy.py
+        go_strategy.py
+        java_strategy.py
+        js_strategy.py
+        kotlin_strategy.py
+        php_strategy.py
+        python_strategy.py
+        r_strategy.py
+        ruby_strategy.py
+        rust_strategy.py
+        scala_strategy.py
+        shell_strategy.py
+        svelte_strategy.py
+        swift_strategy.py
+        vue_strategy.py
+\end{Verbatim}
+\end{terminalbox}
+
+\section{Resumen por Extensión}
+
+\begin{center}
+\rowcolors{2}{tablerow}{white}
+\begin{tabular}{lrl}
+  \toprule
+  \rowcolor{tablehead}\textcolor{white}{\textbf{Extensión}} & \textcolor{white}{\textbf{Archivos}} & \textcolor{white}{\textbf{Lenguaje}} \\
+  \midrule
+  \texttt{.py} & 37 & python \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\medskip
+\textbf{Total de líneas:} 6.481
+
+\chapter{Ficha por Archivo}
+
+\section{\faIcon{folder}\ \texttt{Raíz del proyecto}}
+
+\begin{fichabox}[\faIcon{file-code}\ code\_context.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{code\_context.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 305 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{sys}, \texttt{pathlib}, \texttt{modules}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\section{\faIcon{folder}\ \texttt{modules}}
+
+\begin{fichabox}[\faIcon{file-code}\ \_\_init\_\_.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/\_\_init\_\_.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 0 \\
+  \textbf{Importa} & \textcolor{muted}{(ninguna detectada)} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ ai.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/ai.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 140 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ cli.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/cli.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 171 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{sys}, \texttt{modules}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ compresor.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/compresor.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 315 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{ast}, \texttt{io}, \texttt{re}, \texttt{sys}, \texttt{tokenize}, \texttt{enum}, \texttt{pathlib}, \texttt{argparse}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ git.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/git.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 62 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{subprocess}, \texttt{pathlib}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\section{\faIcon{folder}\ \texttt{modules\textbackslash\{\}imports}}
+
+\begin{fichabox}[\faIcon{file-code}\ core.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/core.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 296 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{pathlib}, \texttt{modules}, \texttt{strategies}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\section{\faIcon{folder}\ \texttt{modules\textbackslash\{\}config}}
+
+\begin{fichabox}[\faIcon{file-code}\ defaults.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/config/defaults.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 51 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\section{\faIcon{folder}\ \texttt{modules\textbackslash\{\}filesystem}}
+
+\begin{fichabox}[\faIcon{file-code}\ filters.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/filesystem/filters.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 100 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{pathlib}, \texttt{modules}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\section{\faIcon{folder}\ \texttt{modules\textbackslash\{\}output}}
+
+\begin{fichabox}[\faIcon{file-code}\ human\_writers.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/output/human\_writers.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 1.061 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{platform}, \texttt{shutil}, \texttt{subprocess}, \texttt{datetime}, \texttt{pathlib}, \texttt{modules}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\section{\faIcon{folder}\ \texttt{modules\textbackslash\{\}config}}
+
+\begin{fichabox}[\faIcon{file-code}\ loader.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/config/loader.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 168 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{json}, \texttt{pathlib}, \texttt{modules}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\section{\faIcon{folder}\ \texttt{modules\textbackslash\{\}aliases}}
+
+\begin{fichabox}[\faIcon{file-code}\ loaders.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/aliases/loaders.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 223 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{json}, \texttt{re}, \texttt{pathlib}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\section{\faIcon{folder}\ \texttt{modules\textbackslash\{\}output}}
+
+\begin{fichabox}[\faIcon{file-code}\ log.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/output/log.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 27 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{pathlib}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\section{\faIcon{folder}\ \texttt{modules\textbackslash\{\}filesystem}}
+
+\begin{fichabox}[\faIcon{file-code}\ ordering.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/filesystem/ordering.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 20 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{pathlib}, \texttt{modules}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\section{\faIcon{folder}\ \texttt{modules\textbackslash\{\}output}}
+
+\begin{fichabox}[\faIcon{file-code}\ preview.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/output/preview.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 82 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{pathlib}, \texttt{modules}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\section{\faIcon{folder}\ \texttt{modules\textbackslash\{\}aliases}}
+
+\begin{fichabox}[\faIcon{file-code}\ resolver.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/aliases/resolver.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 67 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{pathlib}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\section{\faIcon{folder}\ \texttt{modules\textbackslash\{\}output}}
+
+\begin{fichabox}[\faIcon{file-code}\ tree\_builder.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/output/tree\_builder.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 21 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{pathlib}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ writers.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/output/writers.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 367 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{datetime}, \texttt{pathlib}, \texttt{modules}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\section{\faIcon{folder}\ \texttt{modules\textbackslash\{\}imports\textbackslash\{\}strategies}}
+
+\begin{fichabox}[\faIcon{file-code}\ \_\_init\_\_.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/\_\_init\_\_.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 88 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{base.py}, \texttt{js\_strategy.py}, \texttt{python\_strategy.py}, \texttt{svelte\_strategy.py}, \texttt{vue\_strategy.py}, \texttt{java\_strategy.py}, \texttt{csharp\_strategy.py}, \texttt{go\_strategy.py}, \texttt{rust\_strategy.py}, \texttt{php\_strategy.py}, \texttt{ruby\_strategy.py}, \texttt{kotlin\_strategy.py}, \texttt{swift\_strategy.py}, \texttt{c\_strategy.py}, \texttt{scala\_strategy.py} \textcolor{muted}{(+3 más)}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ base.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/base.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 37 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{abc}, \texttt{pathlib}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ c\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/c\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 345 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}, \texttt{functools}, \texttt{pathlib}, \texttt{base.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ csharp\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/csharp\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 156 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}, \texttt{pathlib}, \texttt{base.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ dart\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/dart\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 85 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}, \texttt{pathlib}, \texttt{base.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ go\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/go\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 141 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}, \texttt{functools}, \texttt{pathlib}, \texttt{base.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ java\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/java\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 146 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}, \texttt{functools}, \texttt{pathlib}, \texttt{base.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ js\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/js\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 153 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}, \texttt{pathlib}, \texttt{base.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ kotlin\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/kotlin\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 127 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}, \texttt{functools}, \texttt{pathlib}, \texttt{base.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ php\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/php\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 186 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{json}, \texttt{re}, \texttt{functools}, \texttt{pathlib}, \texttt{base.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ python\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/python\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 123 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{ast}, \texttt{pathlib}, \texttt{base.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ r\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/r\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 169 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{json}, \texttt{re}, \texttt{functools}, \texttt{pathlib}, \texttt{base.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ ruby\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/ruby\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 168 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}, \texttt{functools}, \texttt{pathlib}, \texttt{base.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ rust\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/rust\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 161 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}, \texttt{pathlib}, \texttt{base.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ scala\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/scala\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 155 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}, \texttt{pathlib}, \texttt{base.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ shell\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/shell\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 131 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}, \texttt{pathlib}, \texttt{base.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ svelte\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/svelte\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 192 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}, \texttt{functools}, \texttt{pathlib}, \texttt{js\_strategy.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ swift\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/swift\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 212 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}, \texttt{functools}, \texttt{pathlib}, \texttt{base.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\begin{fichabox}[\faIcon{file-code}\ vue\_strategy.py]
+\small
+\begin{tabular}{@{}ll@{}}
+  \textbf{Ruta} & \texttt{modules/imports/strategies/vue\_strategy.py} \\
+  \textbf{Extensión} & \texttt{.py} \\
+  \textbf{Lenguaje} & python \\
+  \textbf{Líneas} & 230 \\
+  \textbf{Importa} & \parbox[t]{10cm}{\texttt{re}, \texttt{functools}, \texttt{pathlib}, \texttt{js\_strategy.py}} \\
+\end{tabular}
+\end{fichabox}
+
+\medskip
+
+\chapter{Grafo de Dependencias Internas}
+
+\begin{sectionbox}[\faIcon{info-circle}\ Descripción]
+Muestra qué archivos del proyecto se importan entre sí.
+Solo se incluyen archivos cuyas dependencias se resolvieron estáticamente.
+\end{sectionbox}
+
+\medskip
+
+\begin{sectionbox}
+No se detectaron dependencias internas entre los archivos incluidos.
+\end{sectionbox}
+
+\chapter{Historial de Commits}
+
+\begin{center}
+\rowcolors{2}{tablerow}{white}
+\begin{tabular}{clp{9cm}}
+  \toprule
+  \rowcolor{tablehead}\textcolor{white}{\textbf{\#}} & \textcolor{white}{\textbf{Hash}} & \textcolor{white}{\textbf{Mensaje}} \\
+  \midrule
+  1 & \texttt{ec62322} & modularizacion estable dle proyecto, y implementación de strategie es para mapa de imports \\
+  2 & \texttt{677c7f1} & modularizacion estable dle proyecto, y implementación de strategie es para mapa de imports \\
+  3 & \texttt{089aff9} & Merge branch 'main' of https://github.com/JulBarCar/contexto\_codigo\_para\_ia unificar trabajo desde ambos puntos \\
+  4 & \texttt{ed00489} & prijmer paso hacia estructura modular \\
+  5 & \texttt{81e3179} & acutalizacion de la generacion del imports tree \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\chapter{Estimación de Tokens}
+
+\begin{center}
+\rowcolors{2}{tablerow}{white}
+\begin{tabular}{ll}
+  \toprule
+  \rowcolor{tablehead}\textcolor{white}{\textbf{Campo}} & \textcolor{white}{\textbf{Valor}} \\
+  \midrule
+  Modelo & Genérico (sin modelo específico) \\
+  Caracteres & 0 \\
+  Tokens estimados & $\sim$0 \\
+  Costo estimado & \textit{no disponible} \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\begin{sectionbox}[\faIcon{exclamation-triangle}\ Nota]
+Los precios y límites pueden haber cambiado. Verificá en la documentación oficial del modelo antes de tomar decisiones de costo.
+\end{sectionbox}
+
+
+\vfill
+\begin{center}
+  \textcolor{muted}{\small Generado con \texttt{code\_context} --- 2026-06-01 16:31:28}
+\end{center}
+
+\end{document}

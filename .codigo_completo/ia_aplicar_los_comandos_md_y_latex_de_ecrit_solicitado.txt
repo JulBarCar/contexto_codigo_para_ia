@@ -1,0 +1,1576 @@
+### Archivo: code_context.py ###
+"""
+code_context.py
+Recorre la carpeta del proyecto y unifica todos los archivos de código
+en un único archivo de texto, listo para pasar a una IA.
+
+Genera hasta cinco archivos:
+  1. contexto_codigo.txt          → todo el proyecto
+  2. cambios_git.txt              → solo archivos modificados desde el último pull
+  3. mapa_contexto.txt            → con --co: árbol + dependencias, sin código
+  4. ia_[objetivo]_contexto.txt   → con --objetivo: contexto optimizado para IA
+  5. ia_[objetivo]_solicitado.txt → con --objetivo + --archivos: archivos pedidos por IA
+
+Configuración opcional: crea '.codigo_config.json' en la raíz del proyecto.
+Si no existe, funciona con los valores por defecto.
+Usa `--init` para generar un archivo de configuración de ejemplo.
+
+Estructura del proyecto:
+  code_context.py               ← este archivo (orquestador)
+  modules/
+    ai.py                       ← estimación de tokens, modelos, slugs
+    cli.py                      ← parseo de argumentos CLI
+    git.py                      ← integración con git
+    compresor.py                ← compresión de código fuente
+    config/
+      defaults.py               ← constantes y valores por defecto
+      loader.py                 ← carga de .codigo_config.json
+    filesystem/
+      ordering.py               ← ordenación de archivos por prioridad
+      filters.py                ← filtrado y recolección de archivos
+    aliases/
+      loaders.py                ← lectura de aliases (tsconfig, vite, webpack...)
+      resolver.py               ← resolución de imports a rutas reales
+    import_analysis/
+      core.py                   ← extracción de imports y grafo de dependencias
+    output/
+      tree_builder.py           ← árbol visual de archivos
+      log.py                    ← logging de resultados [OK]
+      preview.py                ← modos --preview y --stats
+      writers.py                ← escritura de todos los archivos de salida
+"""
+
+import sys
+from pathlib import Path
+
+from modules.cli import parsear_args
+from modules.config.loader import cargar_config, generar_config_ejemplo
+from modules.ai import MODELOS_TOKENS, objetivo_a_slug
+from modules.git import obtener_archivos_modificados, obtener_ultimos_commits
+from modules.filesystem.filters import recolectar_archivos, filtrar_por_config
+from modules.filesystem.ordering import ordenar_archivos
+from modules.output.writers import (
+    escribir_archivo,
+    escribir_context_only,
+    escribir_mapa_ia,
+    escribir_archivo_ia,
+)
+from modules.output.preview import mostrar_preview, mostrar_stats
+from modules.output.log import _log_ok
+
+try:
+    from modules.compresor import comprimir_texto  # noqa: F401 — valida disponibilidad
+    COMPRESION_DISPONIBLE = True
+except ImportError:
+    COMPRESION_DISPONIBLE = False
+
+
+# ── Orquestador principal ─────────────────────────────────────────────────────
+
+def unificar(args: dict) -> None:
+    raiz = Path(args["carpeta"]).resolve()
+
+    if not raiz.exists():
+        print(f"[ERROR]  La carpeta '{raiz}' no existe.")
+        sys.exit(1)
+
+    if args["init"]:
+        generar_config_ejemplo(raiz, limpio=args["init_limpio"])
+        return
+
+    config     = cargar_config(raiz)
+    salida_dir = config["carpeta_salida"]
+
+    # CLI tiene prioridad sobre el config file
+    if args["limite"] is not None:
+        config["limite_lineas"] = args["limite"]
+    if args["sin_minimos"]:
+        config["omitir_autogenerados"] = True
+    if args["objetivo"]:
+        config["objetivo"] = args["objetivo"]
+    if args["modelo"] is not None:
+        config["modelo"] = args["modelo"]
+    if args.get("comprimir"):
+        config["comprimir"] = args["comprimir"]
+    if args["ignorar_extra"]:
+        config["ignorar"] = config["ignorar"] | set(args["ignorar_extra"])
+
+    modelo = config.get("modelo", "default")
+
+    try:
+        salida_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"[ERROR]  No se pudo crear la carpeta de salida '{salida_dir}': {e}")
+        sys.exit(1)
+
+    print(f"[CONFIG] Salida en: {salida_dir}")
+    if modelo != "default":
+        print(f"[CONFIG] Modelo    : {MODELOS_TOKENS[modelo]['nombre_display']}")
+    if config.get("comprimir"):
+        if COMPRESION_DISPONIBLE:
+            print(f"[CONFIG] Compresión  : activada  (nivel={config['comprimir']})")
+        else:
+            print("[AVISO]  --comprimir requiere modules/compresor.py.")
+    if args["ignorar_extra"]:
+        print(f"[CONFIG] Ignorando extra: {', '.join(args['ignorar_extra'])}")
+
+    con_objetivo = bool(config.get("objetivo"))
+
+    # ── Modo --archivos ───────────────────────────────────────────────────────
+    if args["archivos"] is not None:
+        archivos_resueltos = []
+        for ruta_str in args["archivos"]:
+            candidato = (raiz / ruta_str).resolve()
+            if not candidato.exists():
+                print(f"[AVISO]  Archivo no encontrado, se omite: {ruta_str}")
+                continue
+            if not candidato.is_file():
+                print(f"[AVISO]  No es un archivo, se omite: {ruta_str}")
+                continue
+            archivos_resueltos.append(candidato)
+
+        if not archivos_resueltos:
+            print("[ERROR]  Ninguno de los archivos indicados con --archivos existe.")
+            sys.exit(1)
+
+        archivos_resueltos = ordenar_archivos(archivos_resueltos)
+
+        if con_objetivo:
+            nombre_salida = objetivo_a_slug(config["objetivo"], "solicitado")
+            salida_path   = salida_dir / nombre_salida
+            est = escribir_archivo_ia(
+                salida_path=salida_path,
+                archivos=archivos_resueltos,
+                raiz=raiz,
+                config=config,
+                es_solicitado=True,
+                modelo=modelo,
+                es_segunda_vuelta=args["continua"],
+            )
+            _log_ok("Contexto IA solicitado", salida_path, len(archivos_resueltos), est)
+        else:
+            salida_path = salida_dir / "contexto_solicitado.txt"
+            est = escribir_archivo(
+                salida_path=salida_path,
+                archivos=archivos_resueltos,
+                raiz=raiz,
+                config=config,
+                titulo="CONTEXTO SOLICITADO  |  Objetivo: no especificado",
+                modelo=modelo,
+            )
+            _log_ok("Contexto solicitado", salida_path, len(archivos_resueltos), est)
+        return
+
+    todos = recolectar_archivos(
+        raiz, config,
+        omitir_autogenerados=config.get("omitir_autogenerados", False),
+        limite_lineas=config.get("limite_lineas"),
+        verbose=args["verbose"],
+    )
+
+    if not todos:
+        print("[AVISO]  No se encontraron archivos con las extensiones configuradas.")
+        return
+
+    # ── Modo --preview ────────────────────────────────────────────────────────
+    if args["preview"]:
+        mostrar_preview(todos, raiz, config, modelo)
+        return
+
+    # ── Modo --stats ──────────────────────────────────────────────────────────
+    if args["stats"]:
+        mostrar_stats(todos, raiz, modelo)
+        return
+
+    # ── Modo --co ─────────────────────────────────────────────────────────────
+    if args["co"]:
+        commits = obtener_ultimos_commits(raiz)
+        if con_objetivo:
+            nombre_sal = objetivo_a_slug(config["objetivo"], "mapa")
+            salida_co  = salida_dir / nombre_sal
+            est = escribir_mapa_ia(salida_co, todos, raiz, config, commits, modelo)
+            _log_ok("Mapa IA           ", salida_co, len(todos), est)
+            print(f"         (estructura sin código, formato IA)")
+        else:
+            salida_co = salida_dir / config["nombre_salida_co"]
+            est = escribir_context_only(salida_co, todos, raiz, config, commits, modelo)
+            _log_ok("Mapa de contexto  ", salida_co, len(todos), est)
+            print(f"         (sin código fuente)")
+            print(f"         Este archivo NO contiene código fuente.")
+            print(f"         Úsalo para decidir qué archivos pasarle a la IA.")
+            print(f"         Luego ejecuta el script indicando solo esas carpetas en 'incluir_solo'")
+            print(f"         o usa --solo-cambios si trabajas con git.")
+        return
+
+    # ── Modo --objetivo: contexto completo optimizado para IA ─────────────────
+    if con_objetivo:
+        commits    = obtener_ultimos_commits(raiz)
+        nombre_sal = objetivo_a_slug(config["objetivo"], "contexto")
+        salida_ia  = salida_dir / nombre_sal
+        est = escribir_archivo_ia(
+            salida_path=salida_ia,
+            archivos=todos,
+            raiz=raiz,
+            config=config,
+            es_solicitado=False,
+            commits=commits,
+            modelo=modelo,
+        )
+        _log_ok("Contexto IA       ", salida_ia, len(todos), est)
+        return
+
+    # ── Contexto completo (modo estándar) ─────────────────────────────────────
+    if not args["solo_cambios"]:
+        salida_completa = salida_dir / config["nombre_salida"]
+        est = escribir_archivo(
+            salida_path=salida_completa,
+            archivos=todos,
+            raiz=raiz,
+            config=config,
+            titulo="CONTEXTO COMPLETO DEL PROYECTO",
+            modelo=modelo,
+        )
+        _log_ok("Contexto completo ", salida_completa, len(todos), est)
+
+    # ── Cambios git ───────────────────────────────────────────────────────────
+    modificados_raw = obtener_archivos_modificados(raiz)
+    if modificados_raw is None:
+        return
+    if not modificados_raw:
+        print("[OK]     Sin cambios en git — no se genera archivo de cambios.")
+        return
+
+    modificados = filtrar_por_config(
+        modificados_raw, raiz, config,
+        omitir_autogenerados=config.get("omitir_autogenerados", False),
+        limite_lineas=config.get("limite_lineas"),
+        verbose=args["verbose"],
+    )
+    if not modificados:
+        print("[OK]     Los archivos modificados no coinciden con las extensiones/carpetas configuradas.")
+        return
+
+    commits       = obtener_ultimos_commits(raiz)
+    lista_nombres = ", ".join(str(m.relative_to(raiz)) for m in modificados)
+    nota          = f"Archivos modificados: {lista_nombres}"
+    if commits:
+        nota += f" | Commits recientes: {' / '.join(commits[:3])}"
+
+    salida_cambios = salida_dir / config["nombre_salida_cambios"]
+    est = escribir_archivo(
+        salida_path=salida_cambios,
+        archivos=modificados,
+        raiz=raiz,
+        config=config,
+        titulo="ARCHIVOS MODIFICADOS DESDE EL ÚLTIMO PULL",
+        nota_extra=nota,
+        modelo=modelo,
+    )
+    _log_ok("Cambios git       ", salida_cambios, len(modificados), est)
+
+
+# ── Entrada ───────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    args = parsear_args(sys.argv[1:])
+    unificar(args)
+### Archivo: modules/cli.py ###
+"""
+modules/cli.py
+Parseo de argumentos de línea de comandos.
+
+USO:
+  python code_context.py [carpeta] [opciones]
+
+OPCIONES CLI:
+  --init                    Genera .codigo_config.json de ejemplo con comentarios
+  --init --limpio           Genera .codigo_config.json mínimo, sin comentarios
+  --co                      Solo contexto: árbol + dependencias + fichas, sin código
+  --solo-cambios            Solo genera el archivo de cambios git
+  --limite N                Omite archivos con más de N líneas (default: sin límite)
+  --sin-minimos             Omite lockfiles, *.min.js, migraciones auto-numeradas, etc.
+  --verbose                 Muestra qué archivos se omiten y por qué
+  --preview                 Muestra qué archivos se incluirían, sin generar nada
+  --stats                   Muestra estimación de tokens sin generar archivos
+  --ignorar-extra f1 f2 ... Agrega carpetas/archivos a ignorar sin tocar el config
+  --objetivo "texto"        Define el objetivo de la sesión. Genera un archivo
+                            optimizado para IA con nombre ia_[slug]_contexto.txt
+  --archivos f1 f2 ...      Incluye solo los archivos indicados (rutas relativas).
+                            Con --objetivo genera ia_[slug]_solicitado.txt
+  --continua                Segunda vuelta: omite <context_metadata>, <file_tree> e
+                            <file_index> en ia_[slug]_solicitado.txt (la IA ya los vio).
+                            Solo válido con --objetivo + --archivos.
+  --modelo NOMBRE           Modelo/agente destino para estimar tokens y costo.
+                            Opciones: claude, gpt-4, gpt-4o, gpt-3.5, gemini,
+                                      gemini-pro, llama, mistral, deepseek, default
+                            Default: "default" (estimación genérica, sin costo)
+  --comprimir [leve|medio|agresivo]
+                            Elimina comentarios y docstrings antes de escribir los archivos.
+                            Sin argumento usa nivel "medio". Niveles:
+                              leve      → solo elimina comentarios de línea/bloque
+                              medio     → también docstrings de módulo (default)
+                              agresivo  → todos los docstrings + colapsa líneas vacías
+                            Soporta .py .js .ts .jsx .tsx .html .css
+                            Requiere modules/compresor.py.
+  --ayuda                   Muestra esta ayuda
+"""
+
+import sys
+
+from modules.ai import MODELOS_TOKENS, MODELOS_VALIDOS
+
+
+def parsear_args(argv: list[str]) -> dict:
+    args = {
+        "carpeta":       ".",
+        "init":          False,
+        "init_limpio":   False,
+        "co":            False,
+        "solo_cambios":  False,
+        "limite":        None,
+        "sin_minimos":   False,
+        "verbose":       False,
+        "preview":       False,
+        "stats":         False,
+        "ignorar_extra": [],
+        "objetivo":      None,
+        "archivos":      None,
+        "modelo":        None,
+        "continua":      False,
+        "comprimir":     None,
+    }
+
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok in ("--ayuda", "--help", "-h"):
+            print(__doc__)
+            sys.exit(0)
+        elif tok == "--init":
+            args["init"] = True
+        elif tok == "--limpio":
+            args["init_limpio"] = True
+        elif tok == "--co":
+            args["co"] = True
+        elif tok == "--solo-cambios":
+            args["solo_cambios"] = True
+        elif tok == "--sin-minimos":
+            args["sin_minimos"] = True
+        elif tok == "--verbose":
+            args["verbose"] = True
+        elif tok == "--preview":
+            args["preview"] = True
+        elif tok == "--stats":
+            args["stats"] = True
+        elif tok == "--continua":
+            args["continua"] = True
+        elif tok == "--limite":
+            i += 1
+            if i >= len(argv):
+                print("[ERROR] --limite requiere un número. Ej: --limite 500")
+                sys.exit(1)
+            try:
+                args["limite"] = int(argv[i])
+            except ValueError:
+                print(f"[ERROR] --limite necesita un entero, recibió: '{argv[i]}'")
+                sys.exit(1)
+        elif tok == "--objetivo":
+            i += 1
+            if i >= len(argv):
+                print("[ERROR] --objetivo requiere un texto. Ej: --objetivo \"Agregar JWT\"")
+                sys.exit(1)
+            args["objetivo"] = argv[i]
+        elif tok == "--modelo":
+            i += 1
+            if i >= len(argv):
+                print(f"[ERROR] --modelo requiere un nombre. Opciones: {', '.join(MODELOS_VALIDOS)}")
+                sys.exit(1)
+            m = argv[i].lower()
+            if m not in MODELOS_TOKENS:
+                print(f"[ERROR] Modelo '{argv[i]}' no reconocido.")
+                print(f"        Opciones: {', '.join(MODELOS_VALIDOS)}")
+                sys.exit(1)
+            args["modelo"] = m
+        elif tok == "--ignorar-extra":
+            i += 1
+            extras = []
+            while i < len(argv) and not argv[i].startswith("--"):
+                extras.append(argv[i])
+                i += 1
+            if not extras:
+                print("[ERROR] --ignorar-extra requiere al menos un nombre. Ej: --ignorar-extra tmp logs")
+                sys.exit(1)
+            args["ignorar_extra"] = extras
+            continue
+        elif tok == "--archivos":
+            i += 1
+            archivos_lista = []
+            while i < len(argv) and not argv[i].startswith("--"):
+                archivos_lista.append(argv[i])
+                i += 1
+            if not archivos_lista:
+                print("[ERROR] --archivos requiere al menos un archivo.")
+                sys.exit(1)
+            args["archivos"] = archivos_lista
+            continue
+        elif tok == "--comprimir":
+            i += 1
+            niveles_validos = ["leve", "medio", "agresivo"]
+            if i >= len(argv) or argv[i].startswith("--"):
+                args["comprimir"] = "medio"
+                continue
+            nivel = argv[i].lower()
+            if nivel not in niveles_validos:
+                print(f"[ERROR] --comprimir acepta: {', '.join(niveles_validos)}")
+                sys.exit(1)
+            args["comprimir"] = nivel
+        elif not tok.startswith("--"):
+            args["carpeta"] = tok
+        else:
+            print(f"[AVISO] Argumento desconocido: '{tok}'. Usa --ayuda para ver opciones.")
+        i += 1
+
+    return args
+### Archivo: modules/imports/core.py ###
+"""
+modules/imports/core.py
+Extracción de importaciones y construcción del grafo de dependencias.
+
+Soporta a nivel producción: Python, JS/TS/JSX/TSX/MJS/CJS, Vue, Svelte.
+Soporta a nivel comercial:  Java, C#, Go, Rust, PHP, Ruby, Kotlin, Swift,
+                            C/C++, Scala, Dart, R, Shell/Bash.
+
+El dispatch por tipo de archivo está delegado al patrón Strategy.
+Para agregar soporte a un nuevo lenguaje:
+  1. Crear una subclase de ImportStrategy en strategies/.
+  2. Registrarla en ExtractorImportaciones._strategies (o pasarla
+     al constructor si se necesita una instancia personalizada).
+
+Modo merge (fallback para lenguajes desconocidos)
+─────────────────────────────────────────────────
+Cuando ninguna strategy declara `soporta() = True` para un archivo,
+ExtractorImportaciones ejecuta TODAS las strategies sobre el texto y
+fusiona los resultados (union, preservando orden de aparición).
+Esto garantiza que archivos de lenguajes aún no soportados obtengan
+una extracción best-effort en lugar de retornar lista vacía.
+
+El modo merge se puede desactivar pasando `merge_fallback=False` al
+constructor, útil cuando se quiere un comportamiento estricto (vacío
+si no hay strategy exacta).
+
+Cambios respecto a la versión anterior
+───────────────────────────────────────
+• Nuevas strategies: Java, C#, Go, Rust, PHP, Ruby, Kotlin, Swift,
+  C/C++, Scala, Dart, R, Shell/Bash.
+• Modo merge: archivos sin strategy dedicada son procesados por todas
+  las strategies y sus resultados se fusionan.
+• VueStrategy ahora acepta `raiz` para leer components.d.ts y resolver
+  auto-imports de Vite / unplugin-vue-components / Nuxt.
+• SvelteStrategy reemplaza el tratamiento genérico de .svelte: resuelve
+  $lib y otros aliases de SvelteKit, y descarta módulos virtuales ($app/*,
+  $env/*) que no existen en disco.
+• JsStrategy exporta DYNAMIC_IMPORT_MARKER ('__dynamic__'): token que
+  indica un import() con template literal irresoluble estáticamente.
+  _construir_grafo lo filtra antes de llamar a resolver_importacion.
+"""
+
+from pathlib import Path
+
+from modules.aliases.loaders import cargar_aliases
+from modules.aliases.resolver import resolver_importacion
+
+from .strategies import (
+    DYNAMIC_IMPORT_MARKER,
+    CONDITIONAL_INCLUDE_SUFFIX,
+    BUNDLER_MARKER,
+    ImportStrategy,
+    # Originales
+    JsStrategy,
+    PythonStrategy,
+    SvelteStrategy,
+    VueStrategy,
+    # Actualizadas
+    JavaStrategy,
+    CSharpStrategy,
+    GoStrategy,
+    RustStrategy,
+    PhpStrategy,
+    RubyStrategy,
+    KotlinStrategy,
+    SwiftStrategy,
+    CStrategy,
+    ScalaStrategy,
+    DartStrategy,
+    RStrategy,
+    ShellStrategy,
+)
+
+# Conjunto de marcadores especiales que _construir_grafo debe filtrar
+# antes de intentar resolver en disco.
+_MARCADORES_ESPECIALES: frozenset[str] = frozenset({
+    DYNAMIC_IMPORT_MARKER,   # "__dynamic__"  — ruta irresoluble estáticamente
+    BUNDLER_MARKER,          # "__bundler_require__" — deps de Gemfile en bloque
+})
+
+
+# ── Contexto (Strategy pattern) ───────────────────────────────────────────────
+
+class ExtractorImportaciones:
+    """
+    Contexto del patrón Strategy.
+
+    Selecciona automáticamente la strategy correcta para cada archivo
+    y delega la extracción. El orden de la lista importa: la primera
+    strategy cuyo método `soporta()` retorne True es la que se usa.
+
+    Orden requerido:
+      1. PythonStrategy   — .py  (no hay solapamiento)
+      2. VueStrategy      — .vue (antes de JsStrategy; procesa JS internamente)
+      3. SvelteStrategy   — .svelte (ídem)
+      4. JsStrategy       — .js .ts .jsx .tsx .mjs .cjs
+      5. JavaStrategy     — .java
+      6. CSharpStrategy   — .cs .csx
+      7. GoStrategy       — .go
+      8. RustStrategy     — .rs
+      9. KotlinStrategy   — .kt .kts  (antes de CStrategy para evitar conflictos)
+     10. SwiftStrategy    — .swift
+     11. ScalaStrategy    — .scala .sc
+     12. DartStrategy     — .dart
+     13. PhpStrategy      — .php y variantes
+     14. RubyStrategy     — .rb .rake .gemspec .ru
+     15. CStrategy        — .c .h .cpp .hpp y variantes
+     16. RStrategy        — .R .r .Rmd .Rnw
+     17. ShellStrategy    — .sh .bash .zsh .fish
+
+    Modo merge (merge_fallback=True, por defecto):
+      Si ninguna strategy maneja el archivo, se ejecutan TODAS y se
+      fusionan los resultados. Útil para lenguajes no contemplados.
+
+    Uso básico (la raíz se detecta automáticamente si se pasa al construir):
+        extractor = ExtractorImportaciones(raiz=Path("."))
+        imports = extractor.extraer(Path("src/App.vue"))
+
+    Para inyectar strategies personalizadas (testing, extensión):
+        extractor = ExtractorImportaciones(strategies=[MiStrategy()])
+
+    Para modo estricto (sin merge fallback):
+        extractor = ExtractorImportaciones(merge_fallback=False)
+    """
+
+    def __init__(
+        self,
+        raiz: Path | None = None,
+        strategies: list[ImportStrategy] | None = None,
+        merge_fallback: bool = True,
+    ) -> None:
+        """
+        Args:
+            raiz:           raíz del proyecto. Se pasa a VueStrategy y
+                            SvelteStrategy para resolver auto-imports y aliases.
+                            Si es None, esas features se desactivan gracefully.
+            strategies:     lista de strategies a usar en orden. Si se provee,
+                            `raiz` se ignora (se asume que las instancias ya
+                            están configuradas).
+            merge_fallback: si True (por defecto), los archivos sin strategy
+                            dedicada son procesados por TODAS las strategies
+                            y sus resultados se fusionan. Si False, retorna [].
+        """
+        self._merge_fallback = merge_fallback
+        self._strategies: list[ImportStrategy] = strategies or [
+            # — Originales (nivel producción) —
+            PythonStrategy(),
+            VueStrategy(raiz=raiz),
+            SvelteStrategy(raiz=raiz),
+            JsStrategy(),
+            # — Nuevas (nivel comercial) —
+            JavaStrategy(),
+            CSharpStrategy(),
+            GoStrategy(),
+            RustStrategy(),
+            KotlinStrategy(),   # antes de CStrategy (ambas usan sufijos sin colisión,
+            SwiftStrategy(),    # pero el orden explícito evita sorpresas futuras)
+            ScalaStrategy(),
+            DartStrategy(),
+            PhpStrategy(),
+            RubyStrategy(),
+            CStrategy(),
+            RStrategy(),
+            ShellStrategy(),
+        ]
+
+    def extraer(self, archivo: Path) -> list[str]:
+        """
+        Devuelve la lista deduplicada de strings de importación crudos.
+
+        Comportamiento:
+          - Si hay una strategy que soporta el archivo → la usa exclusivamente.
+          - Si no hay ninguna y merge_fallback=True → ejecuta todas y fusiona.
+          - Si no hay ninguna y merge_fallback=False → retorna [].
+          - Si el archivo no puede leerse → retorna [].
+        """
+        try:
+            texto = archivo.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return []
+
+        # Búsqueda de strategy dedicada
+        for strategy in self._strategies:
+            if strategy.soporta(archivo):
+                return list(dict.fromkeys(strategy.extraer(archivo, texto)))
+
+        # Modo merge: ninguna strategy declaró soporte explícito
+        if not self._merge_fallback:
+            return []
+
+        return self._extraer_merge(archivo, texto)
+
+    def _extraer_merge(self, archivo: Path, texto: str) -> list[str]:
+        """
+        Ejecuta todas las strategies sobre el texto y fusiona los resultados
+        preservando el orden de aparición (primera strategy que detecta cada
+        import tiene prioridad en posición).
+
+        Se usa como fallback para extensiones no reconocidas por ninguna
+        strategy dedicada, ofreciendo extracción best-effort.
+        """
+        fusionados: dict[str, None] = {}   # dict como ordered-set
+
+        for strategy in self._strategies:
+            try:
+                parciales = strategy.extraer(archivo, texto)
+            except Exception:
+                continue
+            for imp in parciales:
+                fusionados[imp] = None
+
+        return list(fusionados.keys())
+
+    def registrar(self, strategy: ImportStrategy, *, al_inicio: bool = False) -> None:
+        """
+        Registra una strategy adicional en tiempo de ejecución.
+
+        Args:
+            strategy:   instancia de ImportStrategy a agregar.
+            al_inicio:  si True, la strategy tiene prioridad sobre las existentes.
+        """
+        if al_inicio:
+            self._strategies.insert(0, strategy)
+        else:
+            self._strategies.append(strategy)
+
+    @property
+    def extensiones_soportadas(self) -> frozenset[str]:
+        """
+        Devuelve el conjunto de extensiones que tienen strategy dedicada.
+        Útil para diagnóstico o para decidir si activar merge_fallback.
+        """
+        resultado: set[str] = set()
+        for strategy in self._strategies:
+            if hasattr(strategy, "EXTENSIONES"):
+                resultado.update(strategy.EXTENSIONES)
+        return frozenset(resultado)
+
+
+# ── Instancia por defecto (compatible con el contrato anterior) ───────────────
+
+_extractor = ExtractorImportaciones()
+
+
+def extraer_importaciones(archivo: Path) -> list[str]:
+    """
+    Función de conveniencia que mantiene la API pública original.
+    Para proyectos Vue/Svelte se recomienda instanciar
+    ExtractorImportaciones(raiz=raiz) directamente para habilitar
+    la resolución de auto-imports y aliases.
+    """
+    return _extractor.extraer(archivo)
+
+
+# ── Grafo de dependencias ─────────────────────────────────────────────────────
+
+def _construir_grafo(archivos: list[Path], raiz: Path) -> list[tuple[str, list[str]]]:
+    """
+    Construye el grafo de dependencias internas entre los archivos del proyecto.
+
+    Usa resolver_importacion con:
+      - Un índice por ruta absoluta (evita colisiones de stem entre carpetas).
+      - Los aliases leídos desde los archivos de config del proyecto.
+
+    Filtra DYNAMIC_IMPORT_MARKER antes de llamar a resolver_importacion,
+    ya que ese token no corresponde a ninguna ruta real en disco.
+
+    Devuelve una lista de (ruta_relativa_posix, [deps_relativas_posix]).
+    Solo incluye archivos que tienen al menos una dependencia interna resuelta.
+    """
+    # ExtractorImportaciones con raiz para habilitar Vue auto-imports y $lib
+    extractor       = ExtractorImportaciones(raiz=raiz)
+    indice_archivos = {a.resolve(): a.relative_to(raiz).as_posix() for a in archivos}
+    aliases         = cargar_aliases(raiz)
+    dep_lines: list[tuple[str, list[str]]] = []
+
+    for archivo in archivos:
+        importaciones = extractor.extraer(archivo)
+        deps_internas: list[str] = []
+
+        for imp in importaciones:
+            # Ignorar marcadores especiales (dinámicos, bundler, etc.)
+            # Los includes condicionales llevan sufijo __conditional__:
+            # se intenta resolver el path base (sin sufijo) igualmente.
+            imp_base = imp.removesuffix(CONDITIONAL_INCLUDE_SUFFIX)
+            if imp_base in _MARCADORES_ESPECIALES or imp_base.startswith("__"):
+                continue
+            resuelto = resolver_importacion(imp_base, archivo, raiz, indice_archivos, aliases)
+            if resuelto:
+                deps_internas.append(resuelto)
+
+        if deps_internas:
+            rel = archivo.relative_to(raiz).as_posix()
+            dep_lines.append((rel, deps_internas))
+
+    return dep_lines
+### Archivo: modules/output/human_writers.py ###
+"""
+modules/output/human_writers.py
+Generación de archivos amigables para humanos en formato Markdown y LaTeX.
+
+Activado con --md y/o --latex desde la CLI.
+Por defecto incluye:
+  - Árbol de archivos
+  - Ficha por archivo (líneas, extensión, imports)
+  - Grafo de dependencias internas
+  - Commits recientes de git
+  - Estimación de tokens
+
+NO incluye código fuente (equivalente a --co implícito).
+Estos archivos están pensados para ser leídos por personas,
+no por IAs, así que el peso no importa.
+
+Markdown:
+  - Tabla de contenidos clickeable
+  - Árbol con bloques de código
+  - Tablas de fichas y dependencias
+  - Badges de estado visual
+
+LaTeX:
+  - Portada automática con metadata del proyecto
+  - Syntax highlighting real con minted
+  - Cajas tcolorbox para secciones
+  - Índice de contenidos automático
+  - Tabla de dependencias con booktabs
+"""
+
+from datetime import datetime
+from pathlib import Path
+
+from modules.ai import estimar_tokens
+from modules.imports.core import _construir_grafo, extraer_importaciones
+from modules.output.tree_builder import construir_arbol
+
+
+# ── Helpers compartidos ───────────────────────────────────────────────────────
+
+def _badge_tokens(est: dict) -> str:
+    """Devuelve un badge Markdown según el porcentaje del context window."""
+    pct = est.get("porcentaje_window")
+    tokens = f"{est['tokens']:,}".replace(",", ".")
+    if pct is None:
+        return f"![tokens](https://img.shields.io/badge/tokens-{tokens.replace('.', '_')}-blue)"
+    if pct <= 85:
+        color = "brightgreen"
+        label = f"{pct:.0f}%_del_window_✓"
+    elif pct <= 100:
+        color = "orange"
+        label = f"{pct:.0f}%_del_window_⚠"
+    else:
+        color = "red"
+        label = f"{pct:.0f}%_EXCEDE_✗"
+    return (
+        f"![tokens](https://img.shields.io/badge/tokens-{tokens.replace('.', '_')}-blue) "
+        f"![window](https://img.shields.io/badge/context_window-{label.replace(' ', '_')}-{color})"
+    )
+
+
+def _ext_to_lang(extension: str) -> str:
+    """Mapea extensión de archivo a nombre de lenguaje para syntax highlighting."""
+    return {
+        ".py":    "python",
+        ".js":    "javascript",
+        ".ts":    "typescript",
+        ".jsx":   "jsx",
+        ".tsx":   "tsx",
+        ".html":  "html",
+        ".css":   "css",
+        ".go":    "go",
+        ".rs":    "rust",
+        ".java":  "java",
+        ".cs":    "csharp",
+        ".cpp":   "cpp",
+        ".c":     "c",
+        ".rb":    "ruby",
+        ".php":   "php",
+        ".kt":    "kotlin",
+        ".swift": "swift",
+        ".scala": "scala",
+        ".sh":    "bash",
+        ".bash":  "bash",
+        ".r":     "r",
+        ".R":     "r",
+        ".vue":   "vue",
+        ".svelte":"svelte",
+        ".dart":  "dart",
+    }.get(extension.lower(), "text")
+
+
+def _ext_to_latex_lang(extension: str) -> str:
+    """Mapea extensión a lenguaje para minted en LaTeX."""
+    return {
+        ".py":    "python3",
+        ".js":    "javascript",
+        ".ts":    "typescript",
+        ".jsx":   "jsx",
+        ".tsx":   "tsx",
+        ".html":  "html",
+        ".css":   "css",
+        ".go":    "go",
+        ".rs":    "rust",
+        ".java":  "java",
+        ".cs":    "csharp",
+        ".cpp":   "cpp",
+        ".c":     "c",
+        ".rb":    "ruby",
+        ".php":   "php",
+        ".kt":    "kotlin",
+        ".swift": "swift",
+        ".scala": "scala",
+        ".sh":    "bash",
+        ".bash":  "bash",
+        ".r":     "r",
+        ".R":     "r",
+        ".vue":   "html",
+        ".svelte":"html",
+        ".dart":  "dart",
+    }.get(extension.lower(), "text")
+
+
+def _escapar_latex(texto: str) -> str:
+    """Escapa caracteres especiales de LaTeX."""
+    replacements = [
+        ("\\", "\\textbackslash{}"),
+        ("&",  "\\&"),
+        ("%",  "\\%"),
+        ("$",  "\\$"),
+        ("#",  "\\#"),
+        ("_",  "\\_"),
+        ("{",  "\\{"),
+        ("}",  "\\}"),
+        ("~",  "\\textasciitilde{}"),
+        ("^",  "\\textasciicircum{}"),
+    ]
+    for src, dst in replacements:
+        texto = texto.replace(src, dst)
+    return texto
+
+
+def _resumen_extension(archivos: list) -> dict:
+    """Cuenta archivos por extensión."""
+    conteo: dict[str, int] = {}
+    for archivo in archivos:
+        ext = archivo.suffix or "(sin extensión)"
+        conteo[ext] = conteo.get(ext, 0) + 1
+    return dict(sorted(conteo.items()))
+
+
+# ── Writer de Markdown ────────────────────────────────────────────────────────
+
+def escribir_markdown(
+    salida_path: Path,
+    archivos: list,
+    raiz: Path,
+    config: dict,
+    commits: list,
+    modelo: str = "default",
+) -> dict | None:
+    """
+    Genera un archivo Markdown amigable para humanos con:
+      - Encabezado con metadata y badges
+      - Tabla de contenidos
+      - Árbol de archivos
+      - Resumen de extensiones (tabla)
+      - Ficha detallada por archivo
+      - Grafo de dependencias internas (tabla)
+      - Últimos commits
+      - Estimación de tokens al final
+    """
+    ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    sep = "---"
+
+    with open(salida_path, "w", encoding="utf-8") as f:
+
+        # ── Encabezado ────────────────────────────────────────────────────────
+        nombre_proyecto = raiz.resolve().name
+        f.write(f"# 📦 {nombre_proyecto}\n\n")
+
+        if config.get("descripcion"):
+            f.write(f"> {config['descripcion']}\n\n")
+
+        f.write(f"**Generado:** {ts}  \n")
+        f.write(f"**Raíz del proyecto:** `{raiz}`  \n")
+        f.write(f"**Total de archivos:** {len(archivos)}  \n")
+        ext_list = ", ".join(sorted(config["extensiones"]))
+        f.write(f"**Extensiones:** `{ext_list}`  \n")
+        if config.get("incluir_solo"):
+            carpetas = ", ".join(f"`{c}`" for c in config["incluir_solo"])
+            f.write(f"**Carpetas incluidas:** {carpetas}  \n")
+        f.write("\n")
+        f.write(sep + "\n\n")
+
+        # ── Tabla de contenidos ───────────────────────────────────────────────
+        f.write("## 📋 Tabla de Contenidos\n\n")
+        f.write("1. [Árbol de Archivos](#-árbol-de-archivos)\n")
+        f.write("2. [Resumen por Extensión](#-resumen-por-extensión)\n")
+        f.write("3. [Ficha por Archivo](#-ficha-por-archivo)\n")
+        f.write("4. [Grafo de Dependencias](#-grafo-de-dependencias-internas)\n")
+        if commits:
+            f.write("5. [Historial de Commits](#-historial-de-commits)\n")
+            f.write("6. [Estimación de Tokens](#-estimación-de-tokens)\n")
+        else:
+            f.write("5. [Estimación de Tokens](#-estimación-de-tokens)\n")
+        f.write("\n")
+        f.write(sep + "\n\n")
+
+        # ── Árbol de archivos ─────────────────────────────────────────────────
+        f.write("## 🗂 Árbol de Archivos\n\n")
+        f.write("```\n")
+        f.write(construir_arbol(archivos, raiz))
+        f.write("\n```\n\n")
+        f.write(sep + "\n\n")
+
+        # ── Resumen por extensión ─────────────────────────────────────────────
+        f.write("## 📊 Resumen por Extensión\n\n")
+        conteo_ext = _resumen_extension(archivos)
+        total_lineas_global = 0
+        lineas_por_archivo: dict[Path, int] = {}
+        for archivo in archivos:
+            try:
+                n = sum(1 for _ in archivo.open(encoding="utf-8", errors="replace"))
+            except Exception:
+                n = 0
+            lineas_por_archivo[archivo] = n
+            total_lineas_global += n
+
+        f.write("| Extensión | Archivos | Lenguaje |\n")
+        f.write("|-----------|:--------:|---------|\n")
+        for ext, cantidad in conteo_ext.items():
+            lang = _ext_to_lang(ext)
+            f.write(f"| `{ext}` | {cantidad} | {lang} |\n")
+        f.write(f"\n**Total de líneas:** {total_lineas_global:,}".replace(",", ".") + "\n\n")
+        f.write(sep + "\n\n")
+
+        # ── Ficha por archivo ─────────────────────────────────────────────────
+        f.write("## 📄 Ficha por Archivo\n\n")
+
+        carpeta_actual = None
+        for archivo in archivos:
+            relativo = archivo.relative_to(raiz)
+            carpeta  = str(relativo.parent) if str(relativo.parent) != "." else "📁 Raíz"
+
+            if carpeta != carpeta_actual:
+                carpeta_actual = carpeta
+                f.write(f"### 📁 `{carpeta}`\n\n")
+
+            n_lineas     = lineas_por_archivo.get(archivo, 0)
+            importaciones = extraer_importaciones(archivo)
+            lang          = _ext_to_lang(archivo.suffix)
+
+            f.write(f"#### `{archivo.name}`\n\n")
+            f.write(f"| Campo | Valor |\n")
+            f.write(f"|-------|-------|\n")
+            f.write(f"| **Ruta** | `{relativo.as_posix()}` |\n")
+            f.write(f"| **Extensión** | `{archivo.suffix}` |\n")
+            f.write(f"| **Lenguaje** | {lang} |\n")
+            f.write(f"| **Líneas** | {n_lineas:,}".replace(",", ".") + " |\n")
+
+            if importaciones:
+                # Mostrar máximo 20 imports, el resto como "+N más"
+                mostrar = importaciones[:20]
+                extras  = len(importaciones) - len(mostrar)
+                imports_str = ", ".join(f"`{i}`" for i in mostrar)
+                if extras > 0:
+                    imports_str += f" *(+{extras} más)*"
+                f.write(f"| **Importa** | {imports_str} |\n")
+            else:
+                f.write(f"| **Importa** | *(ninguna detectada)* |\n")
+
+            f.write("\n")
+
+        f.write(sep + "\n\n")
+
+        # ── Grafo de dependencias ─────────────────────────────────────────────
+        f.write("## 🔗 Grafo de Dependencias Internas\n\n")
+        f.write("> Muestra qué archivos del proyecto se importan entre sí.\n\n")
+
+        dep_lines = _construir_grafo(archivos, raiz)
+
+        if dep_lines:
+            f.write("| Archivo | Depende de |\n")
+            f.write("|---------|------------|\n")
+            for rel, deps in dep_lines:
+                deps_fmt = "<br>".join(f"`{d}`" for d in deps)
+                f.write(f"| `{rel}` | {deps_fmt} |\n")
+            f.write("\n")
+
+            # También en formato árbol para mejor legibilidad
+            f.write("<details>\n<summary>Ver en formato árbol</summary>\n\n```\n")
+            for rel, deps in dep_lines:
+                f.write(f"{rel}\n")
+                for i, d in enumerate(deps):
+                    conector = "└─" if i == len(deps) - 1 else "├─"
+                    f.write(f"  {conector} {d}\n")
+            f.write("```\n</details>\n\n")
+        else:
+            f.write("> *(No se detectaron dependencias internas entre los archivos incluidos)*\n\n")
+
+        f.write(sep + "\n\n")
+
+        # ── Commits ───────────────────────────────────────────────────────────
+        if commits:
+            f.write("## 📝 Historial de Commits\n\n")
+            f.write("| # | Commit |\n")
+            f.write("|---|--------|\n")
+            for i, commit in enumerate(commits, 1):
+                # Separar hash del mensaje si tiene el formato "abc1234 mensaje"
+                partes = commit.split(" ", 1)
+                if len(partes) == 2:
+                    hash_str, mensaje = partes
+                    f.write(f"| {i} | `{hash_str}` {_escapar_markdown(mensaje)} |\n")
+                else:
+                    f.write(f"| {i} | `{commit}` |\n")
+            f.write("\n")
+            f.write(sep + "\n\n")
+
+        # ── Estimación de tokens ──────────────────────────────────────────────
+        f.write("## 🔢 Estimación de Tokens\n\n")
+        try:
+            texto_total = salida_path.read_text(encoding="utf-8", errors="replace")
+            est  = estimar_tokens(texto_total, modelo)
+            info = est["info_modelo"]
+
+            if est.get("porcentaje_window") is not None:
+                f.write(_badge_tokens(est) + "\n\n")
+
+            f.write("| Campo | Valor |\n")
+            f.write("|-------|-------|\n")
+            f.write(f"| **Modelo** | {info['nombre_display']} |\n")
+            f.write(f"| **Caracteres** | {est['chars']:,}".replace(",", ".") + " |\n")
+            f.write(f"| **Tokens estimados** | ~{est['tokens']:,}".replace(",", ".") + " |\n")
+            if est["costo_usd"] is not None:
+                f.write(f"| **Costo estimado** | ~${est['costo_usd']:.4f} USD *(solo entrada)* |\n")
+            else:
+                f.write(f"| **Costo estimado** | *no disponible* |\n")
+            if est["porcentaje_window"] is not None:
+                pct    = est["porcentaje_window"]
+                cw_fmt = f"{info['context_window']:,}".replace(",", ".")
+                estado = "✓ entra" if pct <= 85 else ("⚠ cerca del límite" if pct <= 100 else "✗ EXCEDE")
+                f.write(f"| **Context window** | {pct:.1f}% de {cw_fmt} tokens — {estado} |\n")
+
+            f.write("\n")
+            f.write("> *Los precios y límites pueden haber cambiado. "
+                    "Verificá en la documentación oficial del modelo.*\n\n")
+            f.write(sep + "\n\n")
+            f.write(f"*Generado por [code_context](https://github.com) — {ts}*\n")
+
+            return est
+        except Exception:
+            f.write("*(No se pudo calcular la estimación de tokens)*\n\n")
+            return None
+
+
+def _escapar_markdown(texto: str) -> str:
+    """Escapa caracteres problemáticos en tablas Markdown."""
+    return texto.replace("|", "\\|").replace("\n", " ")
+
+
+# ── Writer de LaTeX ───────────────────────────────────────────────────────────
+
+def escribir_latex(
+    salida_path: Path,
+    archivos: list,
+    raiz: Path,
+    config: dict,
+    commits: list,
+    modelo: str = "default",
+) -> dict | None:
+    """
+    Genera un archivo LaTeX amigable para humanos con:
+      - Portada automática con metadata
+      - Índice de contenidos
+      - Árbol de archivos en entorno verbatim elegante
+      - Tabla de extensiones
+      - Ficha por archivo con tabla booktabs
+      - Grafo de dependencias en tabla
+      - Historial de commits
+      - Estimación de tokens
+    """
+    ts              = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    nombre_proyecto = raiz.resolve().name
+    descripcion_tex = _escapar_latex(config.get("descripcion") or "")
+    raiz_tex        = _escapar_latex(str(raiz))
+
+    with open(salida_path, "w", encoding="utf-8") as f:
+
+        # ── Preámbulo ─────────────────────────────────────────────────────────
+        f.write(r"""\documentclass[12pt, a4paper]{report}
+
+% ── Codificación y fuentes ────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+
+% ── Idioma ────────────────────────────────────────────────────────────────────
+\usepackage[spanish]{babel}
+
+% ── Geometría de página ───────────────────────────────────────────────────────
+\usepackage[
+  top=2.5cm, bottom=2.5cm,
+  left=3cm,  right=2.5cm,
+  headheight=14pt
+]{geometry}
+
+% ── Colores ───────────────────────────────────────────────────────────────────
+\usepackage[dvipsnames, table]{xcolor}
+
+% Paleta de colores del tema
+\definecolor{primary}{HTML}{1a1a2e}
+\definecolor{accent}{HTML}{e94560}
+\definecolor{secondary}{HTML}{16213e}
+\definecolor{light}{HTML}{f5f5f5}
+\definecolor{codebg}{HTML}{1e1e2e}
+\definecolor{codefg}{HTML}{cdd6f4}
+\definecolor{tablehead}{HTML}{0f3460}
+\definecolor{tablerow}{HTML}{eef2ff}
+\definecolor{success}{HTML}{40bf77}
+\definecolor{warning}{HTML}{f5a623}
+\definecolor{danger}{HTML}{e94560}
+\definecolor{muted}{HTML}{6b7280}
+\definecolor{border}{HTML}{d1d5db}
+
+% ── Tipografía ────────────────────────────────────────────────────────────────
+\usepackage{fontawesome5}
+\usepackage{setspace}
+\setstretch{1.15}
+
+% ── Tablas ───────────────────────────────────────────────────────────────────
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{makecell}
+
+% ── Cajas y marcos ───────────────────────────────────────────────────────────
+\usepackage[most]{tcolorbox}
+\tcbuselibrary{listings, breakable, skins}
+
+% Caja de código estilo terminal oscura
+\newtcolorbox{terminalbox}[1][]{
+  enhanced,
+  breakable,
+  colback=codebg,
+  colframe=accent,
+  coltitle=white,
+  fonttitle=\bfseries\small,
+  title={#1},
+  arc=4pt,
+  boxrule=0.8pt,
+  left=6pt, right=6pt, top=4pt, bottom=4pt,
+  attach boxed title to top left={yshift=-2.5mm, xshift=6mm},
+  boxed title style={
+    colback=accent, arc=3pt, boxrule=0pt,
+    left=4pt, right=4pt, top=1pt, bottom=1pt
+  },
+}
+
+% Caja informativa para fichas de archivo
+\newtcolorbox{fichabox}[1][]{
+  enhanced,
+  breakable,
+  colback=light,
+  colframe=primary,
+  coltitle=white,
+  fonttitle=\bfseries\ttfamily\small,
+  title={#1},
+  arc=3pt,
+  boxrule=0.6pt,
+  left=8pt, right=8pt, top=4pt, bottom=4pt,
+  attach boxed title to top left={yshift=-2.5mm, xshift=6mm},
+  boxed title style={
+    colback=primary, arc=2pt, boxrule=0pt,
+    left=5pt, right=5pt, top=1.5pt, bottom=1.5pt
+  },
+}
+
+% Caja de sección destacada
+\newtcolorbox{sectionbox}[1][]{
+  enhanced,
+  colback=secondary!8,
+  colframe=secondary,
+  fonttitle=\bfseries,
+  title={#1},
+  arc=2pt,
+  boxrule=0.5pt,
+  left=6pt, right=6pt,
+}
+
+% ── Código fuente ────────────────────────────────────────────────────────────
+\usepackage{fancyvrb}
+\usepackage{listings}
+
+% Configuración de listings para el árbol de archivos
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=none,
+  breaklines=true,
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space},
+}
+
+% ── Encabezados y pies de página ─────────────────────────────────────────────
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textcolor{muted}{\faIcon{folder-open}\ """ + _escapar_latex(nombre_proyecto) + r"""}}
+\fancyhead[R]{\small\textcolor{muted}{\leftmark}}
+\fancyfoot[C]{\small\textcolor{muted}{\thepage}}
+\renewcommand{\headrulewidth}{0.3pt}
+\renewcommand{\footrulewidth}{0pt}
+\renewcommand{\headrule}{\color{border}\hrule width\headwidth height\headrulewidth}
+
+% ── Títulos de sección ────────────────────────────────────────────────────────
+\usepackage{titlesec}
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries\color{primary}}
+  {\textcolor{accent}{\chaptertitlename\ \thechapter}}
+  {16pt}
+  {\Huge}
+\titleformat{\section}
+  {\normalfont\Large\bfseries\color{secondary}}
+  {\textcolor{accent}{\thesection}}
+  {1em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries\color{primary!80}}
+  {\thesubsection}
+  {0.8em}{}
+
+% ── Hiperlinks ────────────────────────────────────────────────────────────────
+\usepackage[
+  colorlinks=true,
+  linkcolor=accent,
+  urlcolor=accent,
+  citecolor=secondary
+]{hyperref}
+
+% ── Misceláneos ───────────────────────────────────────────────────────────────
+\usepackage{parskip}
+\usepackage{enumitem}
+\setlist{noitemsep, topsep=4pt}
+
+% ── Metadatos PDF ─────────────────────────────────────────────────────────────
+\hypersetup{
+  pdftitle={Documentación: """ + _escapar_latex(nombre_proyecto) + r"""},
+  pdfauthor={code\_context},
+  pdfsubject={Contexto del proyecto},
+}
+
+\begin{document}
+
+""")
+
+        # ── Portada ───────────────────────────────────────────────────────────
+        f.write(r"""\begin{titlepage}
+  \pagecolor{primary}
+  \color{white}
+  \centering
+  \vspace*{3cm}
+
+  % Ícono grande
+  {\fontsize{72}{72}\selectfont\textcolor{accent}{\faIcon{folder-open}}}
+
+  \vspace{1.5cm}
+
+  % Nombre del proyecto
+  {\fontsize{36}{40}\selectfont\bfseries """ + _escapar_latex(nombre_proyecto) + r"""}
+
+  \vspace{0.5cm}
+  \textcolor{accent}{\rule{8cm}{1.5pt}}
+  \vspace{0.5cm}
+
+""")
+        if descripcion_tex:
+            f.write(f"  {{\\large\\itshape {descripcion_tex}}}\n\n  \\vspace{{0.8cm}}\n")
+
+        f.write(r"""  % Metadata
+  \begin{tcolorbox}[
+    enhanced,
+    colback=white!10,
+    colframe=white!30,
+    arc=4pt,
+    boxrule=0.5pt,
+    width=10cm,
+    halign=center,
+  ]
+    \small
+    \faIcon{calendar-alt}\ \textbf{Generado:} """ + _escapar_latex(ts) + r""" \\[4pt]
+    \faIcon{code}\ \textbf{Archivos:} """ + str(len(archivos)) + r""" \\[4pt]
+    \faIcon{folder}\ \textbf{Raíz:} \texttt{""" + raiz_tex + r"""}
+  \end{tcolorbox}
+
+  \vfill
+  \textcolor{white!60}{\small Generado con \texttt{code\_context}}
+\end{titlepage}
+\nopagecolor
+
+""")
+
+        # ── Índice de contenidos ──────────────────────────────────────────────
+        f.write(r"""\tableofcontents
+\clearpage
+
+""")
+
+        # ── Árbol de archivos ─────────────────────────────────────────────────
+        f.write(r"""\chapter{Árbol de Archivos}
+
+""")
+        arbol_str = construir_arbol(archivos, raiz)
+        f.write("\\begin{terminalbox}[\\faIcon{sitemap}\\ Estructura del proyecto]\n")
+        f.write("\\begin{Verbatim}[fontsize=\\small, commandchars=\\\\\\{\\}]\n")
+        f.write(_escapar_verbatim(arbol_str))
+        f.write("\n\\end{Verbatim}\n")
+        f.write("\\end{terminalbox}\n\n")
+
+        # ── Resumen por extensión ─────────────────────────────────────────────
+        f.write(r"""\section{Resumen por Extensión}
+
+""")
+        conteo_ext  = _resumen_extension(archivos)
+        total_lineas_global = 0
+        lineas_por_archivo: dict[Path, int] = {}
+        for archivo in archivos:
+            try:
+                n = sum(1 for _ in archivo.open(encoding="utf-8", errors="replace"))
+            except Exception:
+                n = 0
+            lineas_por_archivo[archivo] = n
+            total_lineas_global += n
+
+        f.write("\\begin{center}\n")
+        f.write("\\rowcolors{2}{tablerow}{white}\n")
+        f.write("\\begin{tabular}{lrl}\n")
+        f.write("  \\toprule\n")
+        f.write("  \\rowcolor{tablehead}\\textcolor{white}{\\textbf{Extensión}} & "
+                "\\textcolor{white}{\\textbf{Archivos}} & "
+                "\\textcolor{white}{\\textbf{Lenguaje}} \\\\\n")
+        f.write("  \\midrule\n")
+        for ext, cantidad in conteo_ext.items():
+            lang = _ext_to_lang(ext)
+            f.write(f"  \\texttt{{{_escapar_latex(ext)}}} & {cantidad} & {_escapar_latex(lang)} \\\\\n")
+        f.write("  \\bottomrule\n")
+        f.write("\\end{tabular}\n")
+        f.write("\\end{center}\n\n")
+
+        total_fmt = f"{total_lineas_global:,}".replace(",", ".")
+        f.write(f"\\medskip\n\\textbf{{Total de líneas:}} {total_fmt}\n\n")
+
+        # ── Ficha por archivo ─────────────────────────────────────────────────
+        f.write(r"""\chapter{Ficha por Archivo}
+
+""")
+        carpeta_actual = None
+        for archivo in archivos:
+            relativo = archivo.relative_to(raiz)
+            carpeta  = str(relativo.parent)
+
+            if carpeta != carpeta_actual:
+                carpeta_actual = carpeta
+                carpeta_display = carpeta if carpeta != "." else "Raíz del proyecto"
+                f.write(f"\\section{{\\faIcon{{folder}}\\ \\texttt{{{_escapar_latex(carpeta_display)}}}}}\n\n")
+
+            n_lineas      = lineas_por_archivo.get(archivo, 0)
+            importaciones = extraer_importaciones(archivo)
+            lang          = _ext_to_lang(archivo.suffix)
+            n_lineas_fmt  = f"{n_lineas:,}".replace(",", ".")
+
+            f.write(f"\\begin{{fichabox}}[\\faIcon{{file-code}}\\ {_escapar_latex(archivo.name)}]\n")
+            f.write("\\small\n")
+            f.write("\\begin{tabular}{@{}ll@{}}\n")
+            f.write(f"  \\textbf{{Ruta}} & \\texttt{{{_escapar_latex(relativo.as_posix())}}} \\\\\n")
+            f.write(f"  \\textbf{{Extensión}} & \\texttt{{{_escapar_latex(archivo.suffix)}}} \\\\\n")
+            f.write(f"  \\textbf{{Lenguaje}} & {_escapar_latex(lang)} \\\\\n")
+            f.write(f"  \\textbf{{Líneas}} & {n_lineas_fmt} \\\\\n")
+
+            if importaciones:
+                mostrar   = importaciones[:15]
+                extras    = len(importaciones) - len(mostrar)
+                imp_partes = ", ".join(f"\\texttt{{{_escapar_latex(i)}}}" for i in mostrar)
+                if extras > 0:
+                    imp_partes += f" \\textcolor{{muted}}{{(+{extras} más)}}"
+                f.write(f"  \\textbf{{Importa}} & \\parbox[t]{{10cm}}{{{imp_partes}}} \\\\\n")
+            else:
+                f.write(f"  \\textbf{{Importa}} & \\textcolor{{muted}}{{(ninguna detectada)}} \\\\\n")
+
+            f.write("\\end{tabular}\n")
+            f.write("\\end{fichabox}\n\n")
+            f.write("\\medskip\n\n")
+
+        # ── Grafo de dependencias ─────────────────────────────────────────────
+        f.write(r"""\chapter{Grafo de Dependencias Internas}
+
+\begin{sectionbox}[\faIcon{info-circle}\ Descripción]
+Muestra qué archivos del proyecto se importan entre sí.
+Solo se incluyen archivos cuyas dependencias se resolvieron estáticamente.
+\end{sectionbox}
+
+\medskip
+
+""")
+        dep_lines = _construir_grafo(archivos, raiz)
+
+        if dep_lines:
+            f.write("\\begin{longtable}{p{5.5cm}p{8.5cm}}\n")
+            f.write("  \\toprule\n")
+            f.write("  \\rowcolor{tablehead}\\textcolor{white}{\\textbf{Archivo}} & "
+                    "\\textcolor{white}{\\textbf{Depende de}} \\\\\n")
+            f.write("  \\midrule\n")
+            f.write("  \\endfirsthead\n")
+            f.write("  \\toprule\n")
+            f.write("  \\rowcolor{tablehead}\\textcolor{white}{\\textbf{Archivo (cont.)}} & "
+                    "\\textcolor{white}{\\textbf{Depende de}} \\\\\n")
+            f.write("  \\midrule\n")
+            f.write("  \\endhead\n")
+            f.write("  \\bottomrule\n")
+            f.write("  \\endlastfoot\n")
+
+            for i, (rel, deps) in enumerate(dep_lines):
+                bg = "\\rowcolor{tablerow}" if i % 2 == 0 else ""
+                deps_str = r" \newline ".join(
+                    f"\\texttt{{{_escapar_latex(d)}}}" for d in deps
+                )
+                f.write(f"  {bg}\\texttt{{{_escapar_latex(rel)}}} & {deps_str} \\\\\n")
+
+            f.write("\\end{longtable}\n\n")
+
+            # También árbol de dependencias
+            f.write("\\section{Vista en Árbol}\n\n")
+            f.write("\\begin{terminalbox}[\\faIcon{project-diagram}\\ Árbol de dependencias]\n")
+            f.write("\\begin{Verbatim}[fontsize=\\footnotesize, commandchars=\\\\\\{\\}]\n")
+            for rel, deps in dep_lines:
+                f.write(f"{_escapar_verbatim(rel)}\n")
+                for i, d in enumerate(deps):
+                    conector = "└─" if i == len(deps) - 1 else "├─"
+                    f.write(f"  {conector} {_escapar_verbatim(d)}\n")
+            f.write("\\end{Verbatim}\n")
+            f.write("\\end{terminalbox}\n\n")
+        else:
+            f.write("\\begin{sectionbox}\n")
+            f.write("No se detectaron dependencias internas entre los archivos incluidos.\n")
+            f.write("\\end{sectionbox}\n\n")
+
+        # ── Commits ───────────────────────────────────────────────────────────
+        if commits:
+            f.write(r"""\chapter{Historial de Commits}
+
+""")
+            f.write("\\begin{center}\n")
+            f.write("\\rowcolors{2}{tablerow}{white}\n")
+            f.write("\\begin{tabular}{clp{9cm}}\n")
+            f.write("  \\toprule\n")
+            f.write("  \\rowcolor{tablehead}\\textcolor{white}{\\textbf{\\#}} & "
+                    "\\textcolor{white}{\\textbf{Hash}} & "
+                    "\\textcolor{white}{\\textbf{Mensaje}} \\\\\n")
+            f.write("  \\midrule\n")
+            for i, commit in enumerate(commits, 1):
+                partes = commit.split(" ", 1)
+                if len(partes) == 2:
+                    hash_str, mensaje = partes
+                    f.write(f"  {i} & \\texttt{{{_escapar_latex(hash_str)}}} & "
+                            f"{_escapar_latex(mensaje)} \\\\\n")
+                else:
+                    f.write(f"  {i} & \\multicolumn{{2}}{{l}}{{\\texttt{{{_escapar_latex(commit)}}}}} \\\\\n")
+            f.write("  \\bottomrule\n")
+            f.write("\\end{tabular}\n")
+            f.write("\\end{center}\n\n")
+
+        # ── Estimación de tokens ──────────────────────────────────────────────
+        f.write(r"""\chapter{Estimación de Tokens}
+
+""")
+        try:
+            texto_total = salida_path.read_text(encoding="utf-8", errors="replace")
+            est  = estimar_tokens(texto_total, modelo)
+            info = est["info_modelo"]
+
+            f.write("\\begin{center}\n")
+            f.write("\\rowcolors{2}{tablerow}{white}\n")
+            f.write("\\begin{tabular}{ll}\n")
+            f.write("  \\toprule\n")
+            f.write("  \\rowcolor{tablehead}\\textcolor{white}{\\textbf{Campo}} & "
+                    "\\textcolor{white}{\\textbf{Valor}} \\\\\n")
+            f.write("  \\midrule\n")
+            f.write(f"  Modelo & {_escapar_latex(info['nombre_display'])} \\\\\n")
+            chars_fmt  = f"{est['chars']:,}".replace(",", ".")
+            tokens_fmt = f"{est['tokens']:,}".replace(",", ".")
+            f.write(f"  Caracteres & {chars_fmt} \\\\\n")
+            f.write(f"  Tokens estimados & $\\sim${tokens_fmt} \\\\\n")
+            if est["costo_usd"] is not None:
+                f.write(f"  Costo estimado & $\\sim$\\${est['costo_usd']:.4f} USD *(solo entrada)* \\\\\n")
+            else:
+                f.write(f"  Costo estimado & \\textit{{no disponible}} \\\\\n")
+            if est["porcentaje_window"] is not None:
+                pct    = est["porcentaje_window"]
+                cw_fmt = f"{info['context_window']:,}".replace(",", ".")
+                if pct <= 85:
+                    estado = f"\\textcolor{{success}}{{{pct:.1f}\\% de {cw_fmt} — ✓ entra}}"
+                elif pct <= 100:
+                    estado = f"\\textcolor{{warning}}{{{pct:.1f}\\% de {cw_fmt} — ⚠ cerca del límite}}"
+                else:
+                    estado = f"\\textcolor{{danger}}{{{pct:.1f}\\% de {cw_fmt} — ✗ EXCEDE}}"
+                f.write(f"  Context window & {estado} \\\\\n")
+            f.write("  \\bottomrule\n")
+            f.write("\\end{tabular}\n")
+            f.write("\\end{center}\n\n")
+
+            f.write("\\begin{sectionbox}[\\faIcon{exclamation-triangle}\\ Nota]\n")
+            f.write("Los precios y límites pueden haber cambiado. "
+                    "Verificá en la documentación oficial del modelo antes de tomar decisiones de costo.\n")
+            f.write("\\end{sectionbox}\n\n")
+
+        except Exception:
+            f.write("\\textit{No se pudo calcular la estimación de tokens.}\n\n")
+            est = None
+
+        # ── Cierre ────────────────────────────────────────────────────────────
+        f.write(r"""
+\vfill
+\begin{center}
+  \textcolor{muted}{\small Generado con \texttt{code\_context} --- """ + _escapar_latex(ts) + r"""}
+\end{center}
+
+\end{document}
+""")
+
+    return est
+
+
+def _escapar_verbatim(texto: str) -> str:
+    """
+    Escapa caracteres que rompen el entorno Verbatim de LaTeX
+    cuando se usa commandchars=\\\\\\{\\}.
+    """
+    # En Verbatim con commandchars, solo \, { y } son especiales
+    return (
+        texto
+        .replace("\\", "\\textbackslash{}")
+        .replace("{", "\\{")
+        .replace("}", "\\}")
+    )
