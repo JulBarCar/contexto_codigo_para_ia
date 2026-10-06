@@ -14,6 +14,7 @@ Funciones públicas:
 
 from datetime import datetime
 from pathlib import Path
+import re
 
 from modules.ai import estimar_tokens, formatear_estimacion_tokens
 from modules.analysis.symbols import extraer_simbolos_de_texto
@@ -201,7 +202,17 @@ def _invertir_grafo(dependencias: dict[str, list[str]]) -> dict[str, list[str]]:
 
 def _recomendar_archivos(archivos: list[Path], raiz: Path,
                          dependencias: dict[str, list[str]],
-                         roles: dict[str, str], limite: int = 10) -> list[tuple[str, str]]:
+                         roles: dict[str, str], objetivo: str = "",
+                         limite: int = 10) -> list[tuple[str, str]]:
+    objetivo_l = objetivo.lower()
+    pesos_objetivo = {
+        "cli": {"cli", "arg", "command", "flag", "comando", "argumento"},
+        "config": {"config", "settings", "default", "perfil", "ignore", "ignorar"},
+        "output": {"json", "stdout", "output", "writer", "markdown", "latex", "salida"},
+        "strategy": {"import", "dependency", "dependencia", "grafo", "strategy", "estrategia"},
+        "test": {"test", "testing", "prueba", "unittest"},
+        "api": {"api", "route", "endpoint", "controller"},
+    }
     candidatos: list[tuple[int, str, str]] = []
     for archivo in archivos:
         rel = archivo.relative_to(raiz).as_posix()
@@ -218,6 +229,16 @@ def _recomendar_archivos(archivos: list[Path], raiz: Path,
         elif rol == "strategy":
             score += 25
             razones.append("strategy implementation")
+        for rol_obj, palabras in pesos_objetivo.items():
+            if rol == rol_obj and any(p in objetivo_l for p in palabras):
+                score += 45
+                razones.append("matches task keywords")
+        rel_l = rel.lower()
+        for palabra in re.findall(r"[a-z0-9_]+", objetivo_l):
+            if len(palabra) >= 4 and palabra in rel_l:
+                score += 20
+                razones.append(f"path matches '{palabra}'")
+                break
         if dependencias.get(rel):
             score += min(30, len(dependencias[rel]) * 5)
             razones.append("has internal dependencies")
@@ -229,6 +250,24 @@ def _recomendar_archivos(archivos: list[Path], raiz: Path,
 
     candidatos.sort(key=lambda item: (-item[0], item[1]))
     return [(rel, reason) for _, rel, reason in candidatos[:limite]]
+
+
+def _resumen_proyecto(archivos: list[Path], raiz: Path,
+                      roles: dict[str, str], dependencias: dict[str, list[str]]) -> list[str]:
+    entrypoints = [p for p, r in roles.items() if r == "entrypoint"][:3]
+    roles_presentes = sorted(set(roles.values()) - {"source"})
+    total_deps = sum(len(v) for v in dependencias.values())
+    lineas = [
+        f"Detected {len(archivos)} included files under {raiz.name}.",
+    ]
+    if entrypoints:
+        lineas.append(f"Likely entrypoint(s): {', '.join(entrypoints)}.")
+    if roles_presentes:
+        lineas.append(f"Detected roles: {', '.join(roles_presentes)}.")
+    if total_deps:
+        lineas.append(f"Resolved {total_deps} internal dependency edge(s).")
+    lineas.append("Recommended agent flow: read this map, then request only needed files with --agent-files or --archivos.")
+    return lineas
 
 def _escribir_file_index(f, archivos: list[Path], raiz: Path,
                          modelo: str = "default",
@@ -337,7 +376,12 @@ def escribir_mapa_ia(salida_path: Path, archivos: list[Path],
 
         _escribir_file_index(f, archivos, raiz, modelo, dep_lookup, used_by, roles)
 
-        recomendados = _recomendar_archivos(archivos, raiz, dep_lookup, roles)
+        f.write("<project_summary>\n")
+        for linea in _resumen_proyecto(archivos, raiz, roles, dep_lookup):
+            f.write(f"  {linea}\n")
+        f.write("</project_summary>\n\n")
+
+        recomendados = _recomendar_archivos(archivos, raiz, dep_lookup, roles, objetivo)
         if recomendados:
             f.write("<recommended_files>\n")
             for rel, reason in recomendados:

@@ -55,13 +55,21 @@ contexto . --json --stdout --max-stdout 100000 \
 ### 2. Request exactly those files (with source code)
 
 ```bash
-contexto . --json --stdout --max-stdout 100000 \
-  --objetivo "<task>" --archivos src/auth.py src/models --sin-instrucciones
+contexto . --agent-files "<task>" src/auth.py src/models
 ```
 
 `--archivos` takes files **and directories** (directories expand to their
 included files, deduplicated). The XML payload ends with `</codebase>` (or
 `</response_instructions>` when instructions are included).
+
+Before editing a central file, inspect impact:
+
+```bash
+contexto . --impact path/to/file.py --json
+```
+
+Use `depends_on`, `used_by`, and `recommended_context` to decide whether more
+files are needed.
 
 ### 3. If it does not fit
 
@@ -93,6 +101,8 @@ then prefer the two-step workflow above).
 | --- | --- |
 | `--co` | Context only: tree + dependency graph + file_index, no code |
 | `--agent-map "..."` | Agent shortcut: JSON + stdout + context-only map |
+| `--agent-files "..." f1 dir2` | Agent shortcut for exact source follow-up |
+| `--impact FILE` | Show dependencies, reverse dependencies and recommended context |
 | `--objetivo "..."` | Enables the AI-optimized XML format and names the output `ia_[slug]_*.txt` |
 | `--archivos f1 dir2 ...` | Restrict output to these files/directories |
 | `--presupuesto N` | Cap the output at ~N tokens (see `dropped` in JSON) |

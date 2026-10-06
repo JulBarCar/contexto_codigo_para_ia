@@ -65,7 +65,10 @@ from modules.output.writers import (
     escribir_context_only,
     escribir_mapa_ia,
     escribir_archivo_ia,
+    _rol_archivo,
 )
+from modules.imports.core import _construir_grafo, extraer_importaciones
+from modules.analysis.symbols import extraer_simbolos
 from modules.output.preview import mostrar_preview, mostrar_stats
 from modules.output.log import _log_ok
 from modules.output.human_writers import escribir_markdown, escribir_latex, compilar_latex
@@ -77,7 +80,7 @@ except ImportError:
     COMPRESION_DISPONIBLE = False
 
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 # ── Helpers de salida máquina ─────────────────────────────────────────────────
@@ -294,6 +297,57 @@ def _doctor(args: dict) -> dict:
             "checks": checks}
 
 
+def _impacto_archivo(args: dict, archivos: list[Path], raiz: Path,
+                     modelo: str) -> dict:
+    objetivo = args.get("impact")
+    candidato = (raiz / objetivo).resolve()
+    rel_obj = _ruta_posix(candidato, raiz)
+    incluidos = {a.resolve(): a for a in archivos}
+    por_rel = {_ruta_posix(a, raiz): a for a in archivos}
+
+    if candidato not in incluidos:
+        existe = candidato.exists()
+        return {
+            "ok": False,
+            "mode": "impact",
+            "version": VERSION,
+            "file": rel_obj,
+            "included": False,
+            "exists": existe,
+            "reason": "file_not_included_by_current_config" if existe else "file_not_found",
+        }
+
+    dep_lookup = dict(_construir_grafo(archivos, raiz))
+    usados_por: dict[str, list[str]] = {}
+    for origen, deps in dep_lookup.items():
+        for dep in deps:
+            usados_por.setdefault(dep, []).append(origen)
+
+    archivo = incluidos[candidato]
+    texto = archivo.read_text(encoding="utf-8", errors="replace")
+    importaciones = extraer_importaciones(archivo)
+    simbolos = ", ".join(extraer_simbolos(archivo)[:12])
+    tokens = estimar_tokens(texto, modelo)["tokens"]
+    depends_on = dep_lookup.get(rel_obj, [])
+    used_by = usados_por.get(rel_obj, [])
+    contexto_recomendado = list(dict.fromkeys([rel_obj, *depends_on, *used_by]))
+    return {
+        "ok": True,
+        "mode": "impact",
+        "version": VERSION,
+        "file": rel_obj,
+        "included": True,
+        "exists": True,
+        "role": _rol_archivo(rel_obj, simbolos, importaciones),
+        "tokens": tokens,
+        "imports": importaciones,
+        "depends_on": depends_on,
+        "used_by": used_by,
+        "recommended_context": contexto_recomendado[:20],
+        "recommended_files_existing": [p for p in contexto_recomendado[:20] if p in por_rel],
+    }
+
+
 # ── Orquestador principal ─────────────────────────────────────────────────────
 
 def unificar(args: dict) -> dict | None:
@@ -449,6 +503,21 @@ def unificar(args: dict) -> dict | None:
     if not todos:
         print("[AVISO]  No se encontraron archivos con las extensiones configuradas.")
         return _sin_salida("vacio", "sin_archivos", args.get("presupuesto"))
+
+    if args.get("impact"):
+        resumen = _impacto_archivo(args, todos, raiz, modelo)
+        if not args.get("json"):
+            print(f"Impacto: {resumen['file']}")
+            print(f"Incluido: {resumen['included']}")
+            if resumen.get("included"):
+                print(f"Rol: {resumen['role']}")
+                print(f"Tokens: ~{resumen['tokens']}")
+                print(f"Depende de: {', '.join(resumen['depends_on']) or '(ninguno)'}")
+                print(f"Usado por: {', '.join(resumen['used_by']) or '(ninguno)'}")
+                print(f"Contexto recomendado: {', '.join(resumen['recommended_context'])}")
+            else:
+                print(f"Motivo: {resumen['reason']}")
+        return resumen
 
     # ── Presupuesto de tokens ──────────────────────────────────────────────────
     omitidos: list[Path] = []
@@ -630,7 +699,7 @@ def unificar(args: dict) -> dict | None:
 if __name__ == "__main__":
     argv = sys.argv[1:]
 
-    if "--json" in argv or "--agent-map" in argv:
+    if "--json" in argv or "--agent-map" in argv or "--agent-files" in argv:
         console.activar_json()
     elif "--stdout" in argv:
         console.silenciar_logs()

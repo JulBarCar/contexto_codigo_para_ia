@@ -61,8 +61,13 @@ contexto . --agent-map "<task>"
 Request only needed files:
 
 ```bash
-contexto . --json --stdout --max-stdout 100000 \
-  --objetivo "<task>" --archivos path/to/file.py path/to/dir --sin-instrucciones
+contexto . --agent-files "<task>" path/to/file.py path/to/dir
+```
+
+Inspect impact before modifying a file:
+
+```bash
+contexto . --impact path/to/file.py --json
 ```
 
 Continue without repeated metadata:
@@ -81,6 +86,8 @@ The skill tells opencode agents to:
 - Inspect `content` from the JSON payload.
 - Pick files from `path`, `role`, `symbols`, `tokens`, `imports`, `depends_on`, `used_by`, `<recommended_files>` and `<dependency_graph>`.
 - Use `--archivos` for precise follow-up context.
+- Use `--agent-files` for the common second round.
+- Use `--impact` before editing central files to inspect dependencies and reverse dependencies.
 
 If `--agent-map` is unavailable, use the equivalent long form:
 

@@ -58,8 +58,13 @@ contexto . --agent-map "<task>"
 Then request only selected files:
 
 ```bash
-contexto . --json --stdout --max-stdout 100000 \
-  --objetivo "<task>" --archivos path/to/file.py --sin-instrucciones
+contexto . --agent-files "<task>" path/to/file.py
+```
+
+Before editing a central file, inspect impact:
+
+```bash
+contexto . --impact path/to/file.py --json
 ```
 
 ## Implementation Notes

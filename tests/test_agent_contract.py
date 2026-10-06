@@ -59,6 +59,7 @@ class AgentContractTests(unittest.TestCase):
         content = payload["content"]
         self.assertEqual(payload["mode"], "mapa_ia")
         self.assertIn("<file_index>", content)
+        self.assertIn("<project_summary>", content)
         self.assertIn("<recommended_files>", content)
         self.assertIn("<dependency_graph>", content)
         self.assertIn("depends_on=\"pkg/util.py\"", content)
@@ -87,6 +88,31 @@ class AgentContractTests(unittest.TestCase):
         self.assertIn("<codebase>", payload["content"])
         self.assertIn("pkg/util.py", payload["content"])
         self.assertNotIn("<response_instructions>", payload["content"])
+
+    def test_agent_files_shortcut(self):
+        with self.make_repo() as tmp:
+            result = self.run_contexto(
+                tmp,
+                "--agent-files",
+                "read util",
+                "pkg/util.py",
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["mode"], "solicitado_ia")
+        self.assertIn("pkg/util.py", payload["content"])
+        self.assertNotIn("<response_instructions>", payload["content"])
+
+    def test_impact_json(self):
+        with self.make_repo() as tmp:
+            result = self.run_contexto(tmp, "--impact", "pkg/util.py", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["mode"], "impact")
+        self.assertTrue(payload["included"])
+        self.assertEqual(payload["file"], "pkg/util.py")
+        self.assertIn("main.py", payload["used_by"])
+        self.assertIn("pkg/util.py", payload["recommended_context"])
 
 
 if __name__ == "__main__":

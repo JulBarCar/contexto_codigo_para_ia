@@ -25,6 +25,8 @@ OPCIONES CLI:
   --preview                 Muestra qué archivos se incluirían, sin generar nada
   --stats                   Muestra estimación de tokens sin generar archivos
   --agent-map "texto"       Alias para agentes: JSON + stdout + --co + objetivo
+  --agent-files "texto" f... Alias para agentes: JSON + stdout + objetivo + archivos
+  --impact archivo          Muestra dependencias e impacto de un archivo
   doctor, --doctor          Diagnostica instalación, PATH, skill y escritura
   --version                 Muestra la versión instalada
   --ignorar-extra f1 f2 ... Agrega carpetas/archivos a ignorar sin tocar el config
@@ -91,6 +93,8 @@ def parsear_args(argv: list[str]) -> dict:
         "preview":       False,
         "stats":         False,
         "agent_map":     False,
+        "agent_files":   False,
+        "impact":        None,
         "doctor":        False,
         "version":       False,
         "ignorar_extra": [],
@@ -148,6 +152,30 @@ def parsear_args(argv: list[str]) -> dict:
             if i + 1 < len(argv) and not argv[i + 1].startswith("--"):
                 i += 1
                 args["objetivo"] = argv[i]
+        elif tok == "--agent-files":
+            args["agent_files"] = True
+            args["json"] = True
+            args["stdout"] = True
+            args["sin_instrucciones"] = True
+            args["max_stdout"] = max(args["max_stdout"], 100000)
+            i += 1
+            if i >= len(argv) or argv[i].startswith("--"):
+                console.fallar('--agent-files requiere un objetivo. Ej: --agent-files "tarea" src/app.py', 2)
+            args["objetivo"] = argv[i]
+            i += 1
+            archivos_lista = []
+            while i < len(argv) and not argv[i].startswith("--"):
+                archivos_lista.append(argv[i])
+                i += 1
+            if not archivos_lista:
+                console.fallar("--agent-files requiere al menos un archivo o directorio.", 2)
+            args["archivos"] = archivos_lista
+            continue
+        elif tok == "--impact":
+            i += 1
+            if i >= len(argv) or argv[i].startswith("--"):
+                console.fallar("--impact requiere una ruta de archivo.", 2)
+            args["impact"] = argv[i]
         elif tok == "--continua":
             args["continua"] = True
         elif tok == "--json":

@@ -48,6 +48,8 @@ En Windows, si acabás de instalar por primera vez y el comando no aparece, cerr
 contexto .
 contexto . --co
 contexto . --agent-map "entender este repo"
+contexto . --agent-files "leer login" src/auth.py src/login.py
+contexto . --impact src/auth.py --json
 contexto . --objetivo "Agregar autenticación JWT"
 contexto . --solo-cambios
 contexto . --preview --modelo claude
@@ -70,6 +72,7 @@ Equivale a `--json --stdout --max-stdout 100000 --co --objetivo "<tarea>" --sin-
 El agente lee el campo JSON `content`, que contiene:
 
 - `<file_tree>` con la estructura del repo.
+- `<project_summary>` con una síntesis heurística del proyecto.
 - `<file_index>` con ruta, rol, líneas, extensión, tokens estimados, símbolos e imports.
 - `depends_on` y `used_by` cuando se pudieron resolver dependencias internas.
 - `<recommended_files>` con archivos sugeridos para leer primero.
@@ -79,8 +82,13 @@ El agente lee el campo JSON `content`, que contiene:
 Segundo paso: pedir solo los archivos necesarios.
 
 ```bash
-contexto . --json --stdout --max-stdout 100000 \
-  --objetivo "<tarea>" --archivos src/app.py src/auth.py --sin-instrucciones
+contexto . --agent-files "<tarea>" src/app.py src/auth.py
+```
+
+Antes de modificar un archivo, el agente puede pedir impacto:
+
+```bash
+contexto . --impact src/app.py --json
 ```
 
 Si el agente ya recibió el mapa en una vuelta anterior, puede usar `--continua` para no repetir metadatos.
@@ -110,6 +118,8 @@ Más detalles para agentes y configuración de opencode: `docs/OPENCODE.md`.
 | --- | --- |
 | `--co` | Genera mapa estructural sin código |
 | `--agent-map "texto"` | Alias para agentes: JSON + stdout + mapa IA sin instrucciones |
+| `--agent-files "texto" f1 dir2` | Alias para agentes: JSON + stdout + objetivo + archivos |
+| `--impact archivo` | Muestra dependencias, `used_by` y contexto recomendado de un archivo |
 | `--objetivo "texto"` | Activa formato IA XML y nombra la salida según la tarea |
 | `--archivos f1 dir2` | Incluye solo archivos o directorios indicados |
 | `--continua` | Omite metadatos repetidos en segunda vuelta con `--objetivo --archivos` |
