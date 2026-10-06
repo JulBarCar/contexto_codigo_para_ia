@@ -14,8 +14,8 @@ class PythonStrategy(ImportStrategy):
     Extrae importaciones de archivos Python mediante análisis del AST.
 
     Comportamiento:
-      - import foo           → devuelve 'foo'  (primer nivel del módulo)
-      - from foo.bar import  → devuelve 'foo'  (primer nivel del módulo)
+      - import foo.bar       → devuelve 'foo.bar'
+      - from foo.bar import  → devuelve 'foo.bar'
       - from . import x      → intenta resolver a ruta relativa real;
                                si no existe en disco, devuelve '.x'
       - from ..utils import  → intenta resolver; si no, devuelve '..utils'
@@ -39,7 +39,7 @@ class PythonStrategy(ImportStrategy):
             # ── import foo / import foo.bar ───────────────────────────────────
             if isinstance(nodo, ast.Import):
                 for alias in nodo.names:
-                    importaciones.append(alias.name.split(".")[0])
+                    importaciones.append(alias.name)
 
             # ── from [.] module import names ─────────────────────────────────
             elif isinstance(nodo, ast.ImportFrom):
@@ -49,7 +49,7 @@ class PythonStrategy(ImportStrategy):
                 # Importación absoluta
                 if level == 0:
                     if module:
-                        importaciones.append(module.split(".")[0])
+                        importaciones.append(module)
                     continue
 
                 # Importación relativa: subir `level - 1` directorios

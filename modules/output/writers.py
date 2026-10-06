@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from modules.ai import estimar_tokens, formatear_estimacion_tokens
+from modules.analysis.symbols import extraer_simbolos_de_texto
 from modules.imports.core import _construir_grafo, extraer_importaciones
 from modules.output.tree_builder import construir_arbol
 
@@ -166,9 +167,57 @@ def escribir_context_only(salida_path: Path, archivos: list[Path],
 
 # ── Escritura: modo --co + --objetivo (mapa XML para IA) ─────────────────────
 
+def _escribir_file_index(f, archivos: list[Path], raiz: Path,
+                         modelo: str = "default",
+                         dependencias: dict[str, list[str]] | None = None) -> None:
+    """
+    Índice compacto por archivo: path, líneas, extensión, tokens y símbolos.
+    `symbols` y `tokens` permiten elegir archivos sin tener que abrirlos.
+    """
+    f.write("<file_index>\n")
+    for archivo in archivos:
+        relativo      = archivo.relative_to(raiz)
+        importaciones = extraer_importaciones(archivo)
+        texto         = None
+        try:
+            texto = archivo.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+        if texto is not None:
+            n_lineas = texto.count("\n") + (1 if texto and not texto.endswith("\n") else 0)
+            n_tokens = estimar_tokens(texto, modelo)["tokens"]
+            simbolos = extraer_simbolos_de_texto(texto, archivo.suffix)
+        else:
+            n_lineas = "?"
+            n_tokens = None
+            simbolos = ""
+
+        rel_posix = relativo.as_posix()
+
+        f.write(f"  <file path=\"{rel_posix}\"")
+        f.write(f" lines=\"{n_lineas}\"")
+        f.write(f" ext=\"{archivo.suffix}\"")
+        if n_tokens is not None:
+            f.write(f" tokens=\"~{n_tokens}\"")
+        if simbolos:
+            f.write(f" symbols=\"{simbolos}\"")
+        if importaciones:
+            deps_str = ", ".join(importaciones[:15])
+            if len(importaciones) > 15:
+                deps_str += f" (+{len(importaciones)-15})"
+            f.write(f" imports=\"{deps_str}\"")
+        deps_resueltas = dependencias.get(rel_posix) if dependencias else None
+        if deps_resueltas:
+            f.write(f" depends_on=\"{', '.join(deps_resueltas)}\"")
+        f.write(" />\n")
+    f.write("</file_index>\n\n")
+
+
 def escribir_mapa_ia(salida_path: Path, archivos: list[Path],
                       raiz: Path, config: dict, commits: list[str] | None = None,
-                      modelo: str = "default") -> dict | None:
+                      modelo: str = "default",
+                      incluir_instrucciones: bool = True) -> dict | None:
     """
     Genera un mapa de contexto (sin código) optimizado para ser leído por una IA.
     Combina la info estructural de --co con el formato XML de --objetivo.
@@ -209,26 +258,11 @@ def escribir_mapa_ia(salida_path: Path, archivos: list[Path],
         f.write(construir_arbol(archivos, raiz))
         f.write("\n</file_tree>\n\n")
 
-        f.write("<file_index>\n")
-        for archivo in archivos:
-            relativo      = archivo.relative_to(raiz)
-            importaciones = extraer_importaciones(archivo)
-            try:
-                n_lineas = sum(1 for _ in archivo.open(encoding="utf-8", errors="replace"))
-            except Exception:
-                n_lineas = "?"
-            f.write(f"  <file path=\"{relativo.as_posix()}\"")
-            f.write(f" lines=\"{n_lineas}\"")
-            f.write(f" ext=\"{archivo.suffix}\"")
-            if importaciones:
-                deps_str = ", ".join(importaciones[:15])
-                if len(importaciones) > 15:
-                    deps_str += f" (+{len(importaciones)-15})"
-                f.write(f" imports=\"{deps_str}\"")
-            f.write(" />\n")
-        f.write("</file_index>\n\n")
-
         dep_lines = _construir_grafo(archivos, raiz)
+        dep_lookup = dict(dep_lines)
+
+        _escribir_file_index(f, archivos, raiz, modelo, dep_lookup)
+
         f.write("<dependency_graph>\n")
         if dep_lines:
             for rel, deps in dep_lines:
@@ -237,24 +271,25 @@ def escribir_mapa_ia(salida_path: Path, archivos: list[Path],
             f.write("  <!-- no internal dependencies detected -->\n")
         f.write("</dependency_graph>\n\n")
 
-        f.write("<response_instructions>\n")
-        f.write("  You are receiving the structural map of a codebase (no source code).\n")
-        f.write("  Your task is defined in <task>.\n\n")
-        f.write("  STEP 1 — Analyze the structure:\n")
-        f.write("    Use <file_tree>, <file_index>, and <dependency_graph> to understand\n")
-        f.write("    the project layout, module sizes, and how files relate to each other.\n\n")
-        f.write("  STEP 2 — Identify relevant files:\n")
-        f.write("    Based on the structure and your task, determine which files you need\n")
-        f.write("    to read to provide a complete and accurate response.\n\n")
-        f.write("  STEP 3 — Output the follow-up command:\n")
-        f.write("    Output EXACTLY this block (copy-paste ready, no surrounding text),\n")
-        f.write("    replacing the placeholders with the actual file paths you need:\n\n")
-        f.write("    <follow_up_command>\n")
-        f.write(f"    {cmd_followup}\n")
-        f.write("    </follow_up_command>\n\n")
-        f.write("    Use forward slashes. Paths are relative to project_root.\n")
-        f.write("    Be selective — only request files genuinely needed for the task.\n")
-        f.write("</response_instructions>\n")
+        if incluir_instrucciones:
+            f.write("<response_instructions>\n")
+            f.write("  You are receiving the structural map of a codebase (no source code).\n")
+            f.write("  Your task is defined in <task>.\n\n")
+            f.write("  STEP 1 — Analyze the structure:\n")
+            f.write("    Use <file_tree>, <file_index>, and <dependency_graph> to understand\n")
+            f.write("    the project layout, module sizes, and how files relate to each other.\n\n")
+            f.write("  STEP 2 — Identify relevant files:\n")
+            f.write("    Based on the structure and your task, determine which files you need\n")
+            f.write("    to read to provide a complete and accurate response.\n\n")
+            f.write("  STEP 3 — Output the follow-up command:\n")
+            f.write("    Output EXACTLY this block (copy-paste ready, no surrounding text),\n")
+            f.write("    replacing the placeholders with the actual file paths you need:\n\n")
+            f.write("    <follow_up_command>\n")
+            f.write(f"    {cmd_followup}\n")
+            f.write("    </follow_up_command>\n\n")
+            f.write("    Use forward slashes. Paths are relative to project_root.\n")
+            f.write("    Be selective — only request files genuinely needed for the task.\n")
+            f.write("</response_instructions>\n")
 
     return _escribir_y_estimar(salida_path, writer, modelo, incluir_en_archivo=False)
 
@@ -265,7 +300,8 @@ def escribir_archivo_ia(salida_path: Path, archivos: list[Path], raiz: Path,
                          config: dict, es_solicitado: bool = False,
                          commits: list[str] | None = None,
                          modelo: str = "default",
-                         es_segunda_vuelta: bool = False) -> dict | None:
+                         es_segunda_vuelta: bool = False,
+                         incluir_instrucciones: bool = True) -> dict | None:
     """
     Genera un archivo de contexto optimizado para ser leído directamente por una IA.
     Sin decoración visual. Estructura semántica con etiquetas tipo XML.
@@ -302,24 +338,8 @@ def escribir_archivo_ia(salida_path: Path, archivos: list[Path], raiz: Path,
             f.write(f"  {objetivo}\n")
             f.write("</task>\n\n")
 
-            f.write("<file_index>\n")
-            for archivo in archivos:
-                relativo      = archivo.relative_to(raiz)
-                importaciones = extraer_importaciones(archivo)
-                try:
-                    n_lineas = sum(1 for _ in archivo.open(encoding="utf-8", errors="replace"))
-                except Exception:
-                    n_lineas = "?"
-                f.write(f"  <file path=\"{relativo.as_posix()}\"")
-                f.write(f" lines=\"{n_lineas}\"")
-                f.write(f" ext=\"{archivo.suffix}\"")
-                if importaciones:
-                    deps_str = ", ".join(importaciones[:15])
-                    if len(importaciones) > 15:
-                        deps_str += f" (+{len(importaciones)-15})"
-                    f.write(f" imports=\"{deps_str}\"")
-                f.write(" />\n")
-            f.write("</file_index>\n\n")
+            dep_lookup = dict(_construir_grafo(archivos, raiz))
+            _escribir_file_index(f, archivos, raiz, modelo, dep_lookup)
 
             f.write("<codebase>\n")
 
@@ -337,31 +357,33 @@ def escribir_archivo_ia(salida_path: Path, archivos: list[Path], raiz: Path,
                 f.write(f"</file>\n")
 
         if not es_segunda_vuelta:
-            f.write("\n</codebase>\n\n")
+            f.write("\n</codebase>")
 
-            f.write("<response_instructions>\n")
-            if not es_solicitado:
-                f.write("  You are receiving the full codebase for the project described above.\n")
-                f.write("  Your task is defined in <task>.\n\n")
-                f.write("  STEP 1 — Identify missing context:\n")
-                f.write("    If you need additional files not present in <codebase> to complete\n")
-                f.write("    the task, list each one with a one-sentence reason.\n\n")
-                f.write("  STEP 2 — Provide a follow-up command:\n")
-                f.write("    If additional files are needed, output EXACTLY this block\n")
-                f.write("    (copy-paste ready, no surrounding text):\n\n")
-                f.write("    <follow_up_command>\n")
-                f.write(f"    {cmd_followup}\n")
-                f.write("    </follow_up_command>\n\n")
-                f.write("    Replace the placeholder paths with real relative paths.\n")
-                f.write("    Use forward slashes. Paths are relative to project_root.\n\n")
-                f.write("  STEP 3 — If you already have enough context:\n")
-                f.write("    State that explicitly, then proceed directly with your response.\n")
-                f.write("    Do not output <follow_up_command>.\n")
-            else:
-                f.write("  You are receiving the specific files you requested.\n")
-                f.write("  Your task is defined in <task>.\n")
-                f.write("  You now have sufficient context. Proceed with your full response.\n")
-                f.write("  Do not ask for additional files.\n")
-            f.write("</response_instructions>\n")
+            if incluir_instrucciones:
+                f.write("\n\n<response_instructions>\n")
+                if not es_solicitado:
+                    f.write("  You are receiving the full codebase for the project described above.\n")
+                    f.write("  Your task is defined in <task>.\n\n")
+                    f.write("  STEP 1 — Identify missing context:\n")
+                    f.write("    If you need additional files not present in <codebase> to complete\n")
+                    f.write("    the task, list each one with a one-sentence reason.\n\n")
+                    f.write("  STEP 2 — Provide a follow-up command:\n")
+                    f.write("    If additional files are needed, output EXACTLY this block\n")
+                    f.write("    (copy-paste ready, no surrounding text):\n\n")
+                    f.write("    <follow_up_command>\n")
+                    f.write(f"    {cmd_followup}\n")
+                    f.write("    </follow_up_command>\n\n")
+                    f.write("    Replace the placeholder paths with real relative paths.\n")
+                    f.write("    Use forward slashes. Paths are relative to project_root.\n\n")
+                    f.write("  STEP 3 — If you already have enough context:\n")
+                    f.write("    State that explicitly, then proceed directly with your response.\n")
+                    f.write("    Do not output <follow_up_command>.\n")
+                else:
+                    f.write("  You are receiving the specific files you requested.\n")
+                    f.write("  Your task is defined in <task>.\n")
+                    f.write("  You now have sufficient context. Proceed with your full response.\n")
+                    f.write("  Do not ask for additional files.\n")
+                f.write("</response_instructions>")
+            f.write("\n")
 
     return _escribir_y_estimar(salida_path, writer, modelo, incluir_en_archivo=False)

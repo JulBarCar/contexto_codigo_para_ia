@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+
+# Generated contexto outputs
+.codigo_completo/
+contexto_codigo.txt
+cambios_git.txt
+mapa_contexto.txt
+contexto_solicitado.txt
+ia_*_contexto.txt
+ia_*_mapa.txt
+ia_*_solicitado.txt
+
+# Local project config
+.codigo_config.json
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

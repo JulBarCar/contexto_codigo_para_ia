@@ -20,7 +20,7 @@ def _log_ok(label: str, path: Path, n_archivos: int, est: dict | None) -> None:
     else:
         token_info = ""
     n = n_archivos
-    print(f"[OK]     {label}  →  {path.name}  ({n} archivo{'s' if n != 1 else ''}){token_info}")
+    print(f"[OK]     {label}  →  {path}  ({n} archivo{'s' if n != 1 else ''}){token_info}")
     if est and est.get("porcentaje_window") is not None and est["porcentaje_window"] > 100:
         pct = est["porcentaje_window"]
         print(f"[AVISO]  El contexto excede el context window del modelo ({pct:.0f}%).")

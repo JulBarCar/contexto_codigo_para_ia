@@ -6,7 +6,7 @@ Resolución de strings de importación a rutas de archivo reales.
 from pathlib import Path
 
 # Extensiones a probar cuando el import no trae extensión explícita
-_EXTENSIONES_RESOLVE = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+_EXTENSIONES_RESOLVE = (".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
                         ".vue", ".svelte", ".astro")
 
 
@@ -24,7 +24,8 @@ def resolver_importacion(
     Orden de resolución:
       1. Ruta relativa (empieza con '.' o '..')
       2. Alias conocido (prefijo más largo que coincida)
-      3. Módulo externo sin alias → None (ignorado)
+      3. Import absoluto dentro del proyecto (por ejemplo modules.cli)
+      4. Módulo externo sin alias → None (ignorado)
 
     Para cada candidato se prueban:
       - Ruta exacta (si ya tiene extensión)
@@ -47,6 +48,8 @@ def resolver_importacion(
             destino = aliases[mejor_alias]
             resto   = imp[len(mejor_alias):].lstrip("/")
             ruta_candidata = (destino / resto).resolve() if resto else destino
+        else:
+            ruta_candidata = (raiz / Path(*imp.split("."))).resolve()
 
     if ruta_candidata is None:
         return None

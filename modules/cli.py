@@ -28,7 +28,13 @@ OPCIONES CLI:
   --objetivo "texto"        Define el objetivo de la sesión. Genera un archivo
                             optimizado para IA con nombre ia_[slug]_contexto.txt
   --archivos f1 f2 ...      Incluye solo los archivos indicados (rutas relativas).
+                            Acepta directorios: se expanden a sus archivos
+                            incluibles según la configuración.
                             Con --objetivo genera ia_[slug]_solicitado.txt
+  --presupuesto N           Recorta la lista (ya ordenada por prioridad) para que
+                            el contexto generado quepa en ~N tokens. Los archivos
+                            fuera de presupuesto aparecen en dropped del JSON.
+                            Aplica a --co, --objetivo y modo estándar.
   --continua                Segunda vuelta: omite <context_metadata>, <file_tree> e
                             <file_index> en ia_[slug]_solicitado.txt (la IA ya los vio).
                             Solo válido con --objetivo + --archivos.
@@ -44,12 +50,27 @@ OPCIONES CLI:
                               agresivo  → todos los docstrings + colapsa líneas vacías
                             Soporta .py .js .ts .jsx .tsx .html .css
                             Requiere modules/compresor.py.
+  --json                    Modo máquina. Los logs van a stderr y el stdout recibe
+                            UNA sola línea JSON con el resultado:
+                            {ok, mode, output_path, files, included, tokens, bytes,
+                             model, window_pct, cost_usd, warnings, ...}
+                            Errores: {"ok": false, "error": ..., "kind": ...}.
+                            kind: error (exit 1) | usage (exit 2) | limit (exit 3).
+  --stdout                  Devuelve el contenido generado directamente por stdout
+                            (sin escribir archivo) y descarta los logs humanos.
+                            Si supera --max-stdout sale con código 3.
+                            Combinado con --json, el contenido va en el campo "content".
+                            Solo aplica con --co, --objetivo, --archivos o --solo-cambios.
+  --max-stdout N            Tope de tokens para --stdout (default: 15000, 0 = sin límite).
+  --sin-instrucciones       Omite el bloque <response_instructions> de los archivos ia_*.
+                            Pensado para agentes que ya conocen el protocolo (skill).
   --ayuda                   Muestra esta ayuda
 """
 
 import sys
 
 from modules.ai import MODELOS_TOKENS, MODELOS_VALIDOS
+from modules.output import console
 
 
 def parsear_args(argv: list[str]) -> dict:
@@ -72,12 +93,19 @@ def parsear_args(argv: list[str]) -> dict:
         "modelo":        None,
         "continua":      False,
         "comprimir":     None,
+        "presupuesto":   None,
+        "json":          False,
+        "stdout":        False,
+        "sin_instrucciones": False,
+        "max_stdout":    15000,
     }
 
     i = 0
     while i < len(argv):
         tok = argv[i]
         if tok in ("--ayuda", "--help", "-h"):
+            if console.MODO_JSON:
+                console.emitir_json({"ok": True, "mode": "ayuda", "help": __doc__})
             print(__doc__)
             sys.exit(0)
         elif tok == "--init":
@@ -102,32 +130,54 @@ def parsear_args(argv: list[str]) -> dict:
             args["stats"] = True
         elif tok == "--continua":
             args["continua"] = True
+        elif tok == "--json":
+            args["json"] = True
+        elif tok == "--stdout":
+            args["stdout"] = True
+        elif tok == "--sin-instrucciones":
+            args["sin_instrucciones"] = True
+        elif tok == "--max-stdout":
+            i += 1
+            if i >= len(argv):
+                console.fallar("--max-stdout requiere un número. Ej: --max-stdout 15000 (0 = sin límite)", 2)
+            try:
+                tope = int(argv[i])
+            except ValueError:
+                console.fallar(f"--max-stdout necesita un entero, recibió: '{argv[i]}'", 2)
+            if tope < 0:
+                console.fallar("--max-stdout no puede ser negativo.", 2)
+            args["max_stdout"] = tope
         elif tok == "--limite":
             i += 1
             if i >= len(argv):
-                print("[ERROR] --limite requiere un número. Ej: --limite 500")
-                sys.exit(1)
+                console.fallar("--limite requiere un número. Ej: --limite 500", 2)
             try:
                 args["limite"] = int(argv[i])
             except ValueError:
-                print(f"[ERROR] --limite necesita un entero, recibió: '{argv[i]}'")
-                sys.exit(1)
+                console.fallar(f"--limite necesita un entero, recibió: '{argv[i]}'", 2)
+        elif tok == "--presupuesto":
+            i += 1
+            if i >= len(argv):
+                console.fallar("--presupuesto requiere un número de tokens. Ej: --presupuesto 30000", 2)
+            try:
+                pres = int(argv[i])
+            except ValueError:
+                console.fallar(f"--presupuesto necesita un entero, recibió: '{argv[i]}'", 2)
+            if pres <= 0:
+                console.fallar("--presupuesto debe ser mayor a 0.", 2)
+            args["presupuesto"] = pres
         elif tok == "--objetivo":
             i += 1
             if i >= len(argv):
-                print("[ERROR] --objetivo requiere un texto. Ej: --objetivo \"Agregar JWT\"")
-                sys.exit(1)
+                console.fallar('--objetivo requiere un texto. Ej: --objetivo "Agregar JWT"', 2)
             args["objetivo"] = argv[i]
         elif tok == "--modelo":
             i += 1
             if i >= len(argv):
-                print(f"[ERROR] --modelo requiere un nombre. Opciones: {', '.join(MODELOS_VALIDOS)}")
-                sys.exit(1)
+                console.fallar(f"--modelo requiere un nombre. Opciones: {', '.join(MODELOS_VALIDOS)}", 2)
             m = argv[i].lower()
             if m not in MODELOS_TOKENS:
-                print(f"[ERROR] Modelo '{argv[i]}' no reconocido.")
-                print(f"        Opciones: {', '.join(MODELOS_VALIDOS)}")
-                sys.exit(1)
+                console.fallar(f"Modelo '{argv[i]}' no reconocido. Opciones: {', '.join(MODELOS_VALIDOS)}", 2)
             args["modelo"] = m
         elif tok == "--ignorar-extra":
             i += 1
@@ -136,8 +186,7 @@ def parsear_args(argv: list[str]) -> dict:
                 extras.append(argv[i])
                 i += 1
             if not extras:
-                print("[ERROR] --ignorar-extra requiere al menos un nombre. Ej: --ignorar-extra tmp logs")
-                sys.exit(1)
+                console.fallar("--ignorar-extra requiere al menos un nombre. Ej: --ignorar-extra tmp logs", 2)
             args["ignorar_extra"] = extras
             continue
         elif tok == "--archivos":
@@ -147,8 +196,7 @@ def parsear_args(argv: list[str]) -> dict:
                 archivos_lista.append(argv[i])
                 i += 1
             if not archivos_lista:
-                print("[ERROR] --archivos requiere al menos un archivo.")
-                sys.exit(1)
+                console.fallar("--archivos requiere al menos un archivo.", 2)
             args["archivos"] = archivos_lista
             continue
         elif tok == "--comprimir":
@@ -159,8 +207,7 @@ def parsear_args(argv: list[str]) -> dict:
                 continue
             nivel = argv[i].lower()
             if nivel not in niveles_validos:
-                print(f"[ERROR] --comprimir acepta: {', '.join(niveles_validos)}")
-                sys.exit(1)
+                console.fallar(f"--comprimir acepta: {', '.join(niveles_validos)}", 2)
             args["comprimir"] = nivel
         elif not tok.startswith("--"):
             args["carpeta"] = tok
@@ -168,4 +215,4 @@ def parsear_args(argv: list[str]) -> dict:
             print(f"[AVISO] Argumento desconocido: '{tok}'. Usa --ayuda para ver opciones.")
         i += 1
 
-    return args 
+    return args
