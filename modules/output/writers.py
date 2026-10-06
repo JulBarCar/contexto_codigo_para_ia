@@ -167,9 +167,74 @@ def escribir_context_only(salida_path: Path, archivos: list[Path],
 
 # ── Escritura: modo --co + --objetivo (mapa XML para IA) ─────────────────────
 
+def _rol_archivo(rel_path: str, simbolos: str, importaciones: list[str]) -> str:
+    texto = f"{rel_path} {simbolos} {' '.join(importaciones)}".lower()
+    nombre = Path(rel_path).name.lower()
+    partes = {p.lower() for p in Path(rel_path).parts}
+    if nombre in {"main.py", "app.py", "server.py", "index.py", "code_context.py"}:
+        return "entrypoint"
+    if "tests" in partes or "test" in partes or nombre.startswith("test_") \
+            or nombre.endswith("_test.py") or nombre.endswith(".spec.py"):
+        return "test"
+    if "cli" in texto or "argparse" in texto or "command" in texto:
+        return "cli"
+    if "config" in texto or "settings" in texto or "defaults" in texto:
+        return "config"
+    if "writer" in texto or "output" in texto or "render" in texto:
+        return "output"
+    if "strategy" in texto or "strategies" in texto:
+        return "strategy"
+    if "route" in texto or "controller" in texto or "/api" in texto:
+        return "api"
+    if "model" in texto or "schema" in texto or "entity" in texto:
+        return "data_model"
+    return "source"
+
+
+def _invertir_grafo(dependencias: dict[str, list[str]]) -> dict[str, list[str]]:
+    usados_por: dict[str, list[str]] = {}
+    for origen, deps in dependencias.items():
+        for dep in deps:
+            usados_por.setdefault(dep, []).append(origen)
+    return usados_por
+
+
+def _recomendar_archivos(archivos: list[Path], raiz: Path,
+                         dependencias: dict[str, list[str]],
+                         roles: dict[str, str], limite: int = 10) -> list[tuple[str, str]]:
+    candidatos: list[tuple[int, str, str]] = []
+    for archivo in archivos:
+        rel = archivo.relative_to(raiz).as_posix()
+        nombre = archivo.name.lower()
+        rol = roles.get(rel, "source")
+        score = 0
+        razones: list[str] = []
+        if rol == "entrypoint":
+            score += 100
+            razones.append("main entrypoint")
+        elif rol in {"cli", "config", "api", "output"}:
+            score += 60
+            razones.append(f"{rol} role")
+        elif rol == "strategy":
+            score += 25
+            razones.append("strategy implementation")
+        if dependencias.get(rel):
+            score += min(30, len(dependencias[rel]) * 5)
+            razones.append("has internal dependencies")
+        if nombre in {"readme.md", "package.json", "pyproject.toml"}:
+            score += 40
+            razones.append("project metadata")
+        if score:
+            candidatos.append((score, rel, "; ".join(razones)))
+
+    candidatos.sort(key=lambda item: (-item[0], item[1]))
+    return [(rel, reason) for _, rel, reason in candidatos[:limite]]
+
 def _escribir_file_index(f, archivos: list[Path], raiz: Path,
                          modelo: str = "default",
-                         dependencias: dict[str, list[str]] | None = None) -> None:
+                         dependencias: dict[str, list[str]] | None = None,
+                         usados_por: dict[str, list[str]] | None = None,
+                         roles: dict[str, str] | None = None) -> None:
     """
     Índice compacto por archivo: path, líneas, extensión, tokens y símbolos.
     `symbols` y `tokens` permiten elegir archivos sin tener que abrirlos.
@@ -194,10 +259,14 @@ def _escribir_file_index(f, archivos: list[Path], raiz: Path,
             simbolos = ""
 
         rel_posix = relativo.as_posix()
+        rol = _rol_archivo(rel_posix, simbolos, importaciones)
+        if roles is not None:
+            roles[rel_posix] = rol
 
         f.write(f"  <file path=\"{rel_posix}\"")
         f.write(f" lines=\"{n_lineas}\"")
         f.write(f" ext=\"{archivo.suffix}\"")
+        f.write(f" role=\"{rol}\"")
         if n_tokens is not None:
             f.write(f" tokens=\"~{n_tokens}\"")
         if simbolos:
@@ -210,6 +279,9 @@ def _escribir_file_index(f, archivos: list[Path], raiz: Path,
         deps_resueltas = dependencias.get(rel_posix) if dependencias else None
         if deps_resueltas:
             f.write(f" depends_on=\"{', '.join(deps_resueltas)}\"")
+        refs = usados_por.get(rel_posix) if usados_por else None
+        if refs:
+            f.write(f" used_by=\"{', '.join(refs)}\"")
         f.write(" />\n")
     f.write("</file_index>\n\n")
 
@@ -260,8 +332,17 @@ def escribir_mapa_ia(salida_path: Path, archivos: list[Path],
 
         dep_lines = _construir_grafo(archivos, raiz)
         dep_lookup = dict(dep_lines)
+        used_by = _invertir_grafo(dep_lookup)
+        roles: dict[str, str] = {}
 
-        _escribir_file_index(f, archivos, raiz, modelo, dep_lookup)
+        _escribir_file_index(f, archivos, raiz, modelo, dep_lookup, used_by, roles)
+
+        recomendados = _recomendar_archivos(archivos, raiz, dep_lookup, roles)
+        if recomendados:
+            f.write("<recommended_files>\n")
+            for rel, reason in recomendados:
+                f.write(f"  <file path=\"{rel}\" reason=\"{reason}\" />\n")
+            f.write("</recommended_files>\n\n")
 
         f.write("<dependency_graph>\n")
         if dep_lines:
@@ -339,7 +420,8 @@ def escribir_archivo_ia(salida_path: Path, archivos: list[Path], raiz: Path,
             f.write("</task>\n\n")
 
             dep_lookup = dict(_construir_grafo(archivos, raiz))
-            _escribir_file_index(f, archivos, raiz, modelo, dep_lookup)
+            used_by = _invertir_grafo(dep_lookup)
+            _escribir_file_index(f, archivos, raiz, modelo, dep_lookup, used_by)
 
             f.write("<codebase>\n")
 

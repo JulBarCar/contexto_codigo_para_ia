@@ -35,15 +35,22 @@ Main payload fields: `ok`, `mode`, `output_path`, `files`, `included`
 ### 1. Survey the codebase (no source code, cheap)
 
 ```bash
-contexto . --json --stdout --max-stdout 100000 \
-  --co --objetivo "<task>" --sin-instrucciones
+contexto . --agent-map "<task>"
 ```
 
 Read the JSON `content` field first. The `<file_index>` has one entry per file
-with `path`, `lines`, `ext`, `tokens="~N"`, `symbols="..."` and detected
-imports; the `<dependency_graph>` resolves internal files when possible. Pick
-the minimum set of files you need from those fields instead of opening files
-speculatively.
+with `path`, `role`, `lines`, `ext`, `tokens="~N"`, `symbols="..."`, detected
+imports, `depends_on`, and `used_by` when available. The `<recommended_files>`
+section suggests high-value starting points, and `<dependency_graph>` resolves
+internal files when possible. Pick the minimum set of files you need from those
+fields instead of opening files speculatively.
+
+If `--agent-map` is unavailable, use the equivalent long form:
+
+```bash
+contexto . --json --stdout --max-stdout 100000 \
+  --co --objetivo "<task>" --sin-instrucciones
+```
 
 ### 2. Request exactly those files (with source code)
 
@@ -85,6 +92,7 @@ then prefer the two-step workflow above).
 | Flag | Purpose |
 | --- | --- |
 | `--co` | Context only: tree + dependency graph + file_index, no code |
+| `--agent-map "..."` | Agent shortcut: JSON + stdout + context-only map |
 | `--objetivo "..."` | Enables the AI-optimized XML format and names the output `ia_[slug]_*.txt` |
 | `--archivos f1 dir2 ...` | Restrict output to these files/directories |
 | `--presupuesto N` | Cap the output at ~N tokens (see `dropped` in JSON) |
@@ -94,6 +102,8 @@ then prefer the two-step workflow above).
 | `--sin-instrucciones` | Omit `<response_instructions>` |
 | `--preview` / `--stats` | List files / token estimate without writing anything |
 | `--modelo NAME` | Token estimation model: `claude`, `gpt-4o`, `gemini`, `default`... |
+| `doctor` / `--doctor` | Diagnose install, PATH, skill and output writability |
+| `--version` | Print installed version |
 
 Outputs land in `.codigo_completo/` (configurable via
 `.codigo_config.json`, created with `contexto . --init`). If the `contexto`

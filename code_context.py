@@ -49,6 +49,7 @@ Estructura del proyecto:
 """
 
 import sys
+import shutil
 from pathlib import Path
 
 from modules.cli import parsear_args
@@ -74,6 +75,9 @@ try:
     COMPRESION_DISPONIBLE = True
 except ImportError:
     COMPRESION_DISPONIBLE = False
+
+
+VERSION = "0.2.0"
 
 
 # ── Helpers de salida máquina ─────────────────────────────────────────────────
@@ -149,6 +153,7 @@ def _resumen_base(mode: str, salida_path: Path | None, archivos: list[Path],
     return {
         "ok": True,
         "mode": mode,
+        "version": VERSION,
         "output_path": str(salida_path) if salida_path else None,
         "files": len(archivos),
         "included": incluidos[:MAX_INCLUDED],
@@ -175,6 +180,9 @@ def _entregar_salida(salida_path: Path, mode: str, archivos: list[Path],
     resumen = _resumen_base(mode, salida_path, archivos, est, raiz,
                             omitidos, args.get("presupuesto"))
     resumen["stdout"] = bool(args.get("stdout"))
+    if mode == "mapa_ia":
+        total_tokens = _estimar_tokens_fuente(archivos, modelo)
+        resumen["estimated_full_context_tokens"] = total_tokens
 
     if not args.get("stdout"):
         return resumen
@@ -204,6 +212,10 @@ def _entregar_salida(salida_path: Path, mode: str, archivos: list[Path],
     resumen["tokens"] = est_contenido["tokens"]
     resumen["bytes"] = est_contenido["chars"]
     resumen["output_path"] = None
+    if resumen.get("estimated_full_context_tokens") and est_contenido["tokens"]:
+        total = resumen["estimated_full_context_tokens"]
+        resumen["estimated_savings_pct"] = round(
+            max(0, 1 - (est_contenido["tokens"] / total)) * 100, 1)
 
     if args.get("json"):
         resumen["content"] = texto
@@ -215,13 +227,92 @@ def _entregar_salida(salida_path: Path, mode: str, archivos: list[Path],
 
 def _sin_salida(mode: str, nota: str, presupuesto: int | None = None) -> dict:
     return {"ok": True, "mode": mode, "output_path": None, "files": 0,
+            "version": VERSION,
             "dropped": [], "dropped_count": 0, "presupuesto": presupuesto,
             "notes": [nota]}
+
+
+def _estimar_tokens_fuente(archivos: list[Path], modelo: str) -> int:
+    cpt = MODELOS_TOKENS.get(modelo, MODELOS_TOKENS["default"])["chars_por_token"]
+    total_chars = 0
+    for archivo in archivos:
+        try:
+            total_chars += archivo.stat().st_size
+        except OSError:
+            continue
+    return int(total_chars / cpt)
+
+
+def _version_payload() -> dict:
+    return {"ok": True, "mode": "version", "version": VERSION}
+
+
+def _doctor(args: dict) -> dict:
+    raiz = Path(args["carpeta"]).resolve()
+    install_dir = Path.home() / "code-context"
+    skill_path = Path.home() / ".config" / "opencode" / "skills" / "contexto" / "SKILL.md"
+    checks: list[dict] = []
+
+    def add(name: str, ok: bool, detail: str) -> None:
+        checks.append({"name": name, "ok": ok, "detail": detail})
+
+    add("python", True, sys.executable)
+
+    contexto_cmd = shutil.which("contexto")
+    add("contexto_on_path", contexto_cmd is not None,
+        contexto_cmd or "contexto no encontrado en PATH")
+
+    if install_dir.exists():
+        add("windows_install_dir", True, str(install_dir))
+    else:
+        add("windows_install_dir", False, f"no existe: {install_dir}")
+
+    add("opencode_skill", skill_path.exists(), str(skill_path))
+
+    salida_dir = raiz / ".codigo_completo"
+    try:
+        salida_dir.mkdir(parents=True, exist_ok=True)
+        probe = salida_dir / ".doctor_write_test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        add("output_writable", True, str(salida_dir))
+    except OSError as e:
+        add("output_writable", False, f"{salida_dir}: {e}")
+
+    config_path = raiz / NOMBRE_CONFIG
+    if config_path.exists():
+        try:
+            cargar_config(raiz)
+            add("config", True, str(config_path))
+        except Exception as e:
+            add("config", False, f"{config_path}: {type(e).__name__}: {e}")
+    else:
+        add("config", True, "sin .codigo_config.json, se usaran defaults")
+
+    ok = all(c["ok"] for c in checks)
+    return {"ok": ok, "mode": "doctor", "version": VERSION, "root": str(raiz),
+            "checks": checks}
 
 
 # ── Orquestador principal ─────────────────────────────────────────────────────
 
 def unificar(args: dict) -> dict | None:
+    if args.get("version"):
+        payload = _version_payload()
+        if not args.get("json"):
+            print(VERSION)
+        return payload
+
+    if args.get("doctor"):
+        resumen = _doctor(args)
+        if not args.get("json"):
+            estado = "OK" if resumen["ok"] else "ERROR"
+            print(f"contexto doctor {estado} (version {VERSION})")
+            for check in resumen["checks"]:
+                marca = "OK" if check["ok"] else "ERROR"
+                print(f"[{marca}] {check['name']}: {check['detail']}")
+        return resumen
+
     raiz = Path(args["carpeta"]).resolve()
 
     if not raiz.exists():
@@ -539,7 +630,7 @@ def unificar(args: dict) -> dict | None:
 if __name__ == "__main__":
     argv = sys.argv[1:]
 
-    if "--json" in argv:
+    if "--json" in argv or "--agent-map" in argv:
         console.activar_json()
     elif "--stdout" in argv:
         console.silenciar_logs()

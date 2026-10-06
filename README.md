@@ -47,6 +47,7 @@ En Windows, si acabás de instalar por primera vez y el comando no aparece, cerr
 ```bash
 contexto .
 contexto . --co
+contexto . --agent-map "entender este repo"
 contexto . --objetivo "Agregar autenticación JWT"
 contexto . --solo-cambios
 contexto . --preview --modelo claude
@@ -61,16 +62,19 @@ Después de instalar, opencode puede cargar la skill `contexto`. La skill enseñ
 Primer paso: mapa estructural sin código, barato y apto para agentes.
 
 ```bash
-contexto . --json --stdout --max-stdout 100000 \
-  --co --objetivo "<tarea>" --sin-instrucciones
+contexto . --agent-map "<tarea>"
 ```
+
+Equivale a `--json --stdout --max-stdout 100000 --co --objetivo "<tarea>" --sin-instrucciones`.
 
 El agente lee el campo JSON `content`, que contiene:
 
 - `<file_tree>` con la estructura del repo.
-- `<file_index>` con ruta, líneas, extensión, tokens estimados, símbolos e imports.
-- `depends_on` cuando se pudieron resolver dependencias internas.
+- `<file_index>` con ruta, rol, líneas, extensión, tokens estimados, símbolos e imports.
+- `depends_on` y `used_by` cuando se pudieron resolver dependencias internas.
+- `<recommended_files>` con archivos sugeridos para leer primero.
 - `<dependency_graph>` con relaciones internas entre archivos.
+- Métricas JSON como `estimated_full_context_tokens` y `estimated_savings_pct`.
 
 Segundo paso: pedir solo los archivos necesarios.
 
@@ -105,6 +109,7 @@ Más detalles para agentes y configuración de opencode: `docs/OPENCODE.md`.
 | Flag | Descripción |
 | --- | --- |
 | `--co` | Genera mapa estructural sin código |
+| `--agent-map "texto"` | Alias para agentes: JSON + stdout + mapa IA sin instrucciones |
 | `--objetivo "texto"` | Activa formato IA XML y nombra la salida según la tarea |
 | `--archivos f1 dir2` | Incluye solo archivos o directorios indicados |
 | `--continua` | Omite metadatos repetidos en segunda vuelta con `--objetivo --archivos` |
@@ -122,6 +127,8 @@ Más detalles para agentes y configuración de opencode: `docs/OPENCODE.md`.
 | `--limite N` | Omite archivos con más de N líneas |
 | `--sin-minimos` | Omite minificados, lockfiles y otros generados |
 | `--comprimir [leve|medio|agresivo]` | Elimina comentarios/docstrings en lenguajes soportados |
+| `--version` | Muestra la versión instalada |
+| `doctor`, `--doctor` | Diagnostica instalación, PATH, skill y escritura |
 
 ## Configuración Por Proyecto
 

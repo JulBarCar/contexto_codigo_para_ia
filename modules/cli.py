@@ -24,6 +24,9 @@ OPCIONES CLI:
   --verbose                 Muestra qué archivos se omiten y por qué
   --preview                 Muestra qué archivos se incluirían, sin generar nada
   --stats                   Muestra estimación de tokens sin generar archivos
+  --agent-map "texto"       Alias para agentes: JSON + stdout + --co + objetivo
+  doctor, --doctor          Diagnostica instalación, PATH, skill y escritura
+  --version                 Muestra la versión instalada
   --ignorar-extra f1 f2 ... Agrega carpetas/archivos a ignorar sin tocar el config
   --objetivo "texto"        Define el objetivo de la sesión. Genera un archivo
                             optimizado para IA con nombre ia_[slug]_contexto.txt
@@ -87,6 +90,9 @@ def parsear_args(argv: list[str]) -> dict:
         "verbose":       False,
         "preview":       False,
         "stats":         False,
+        "agent_map":     False,
+        "doctor":        False,
+        "version":       False,
         "ignorar_extra": [],
         "objetivo":      None,
         "archivos":      None,
@@ -128,6 +134,20 @@ def parsear_args(argv: list[str]) -> dict:
             args["preview"] = True
         elif tok == "--stats":
             args["stats"] = True
+        elif tok in ("doctor", "--doctor"):
+            args["doctor"] = True
+        elif tok == "--version":
+            args["version"] = True
+        elif tok == "--agent-map":
+            args["agent_map"] = True
+            args["co"] = True
+            args["json"] = True
+            args["stdout"] = True
+            args["sin_instrucciones"] = True
+            args["max_stdout"] = max(args["max_stdout"], 100000)
+            if i + 1 < len(argv) and not argv[i + 1].startswith("--"):
+                i += 1
+                args["objetivo"] = argv[i]
         elif tok == "--continua":
             args["continua"] = True
         elif tok == "--json":
@@ -214,5 +234,8 @@ def parsear_args(argv: list[str]) -> dict:
         else:
             print(f"[AVISO] Argumento desconocido: '{tok}'. Usa --ayuda para ver opciones.")
         i += 1
+
+    if args["agent_map"] and not args["objetivo"]:
+        console.fallar('--agent-map requiere un objetivo. Ej: --agent-map "entender este repo"', 2)
 
     return args

@@ -8,14 +8,22 @@ from pathlib import Path
 
 def construir_arbol(archivos: list[Path], raiz: Path) -> str:
     lineas = [f"{raiz.resolve().name}/"]
-    directorios_vistos: set = set()
+    arbol: dict[str, dict] = {}
+
     for archivo in archivos:
         relativo = archivo.relative_to(raiz)
-        partes   = relativo.parts
-        for i, parte in enumerate(partes[:-1]):
-            clave = partes[: i + 1]
-            if clave not in directorios_vistos:
-                directorios_vistos.add(clave)
-                lineas.append(f"{'  ' * (i + 1)}{parte}/")
-        lineas.append(f"{'  ' * len(partes)}{partes[-1]}")
+        nodo = arbol
+        for parte in relativo.parts:
+            nodo = nodo.setdefault(parte, {})
+
+    def escribir(nodo: dict[str, dict], nivel: int) -> None:
+        dirs = sorted(k for k, v in nodo.items() if v)
+        files = sorted(k for k, v in nodo.items() if not v)
+        for nombre in dirs:
+            lineas.append(f"{'  ' * nivel}{nombre}/")
+            escribir(nodo[nombre], nivel + 1)
+        for nombre in files:
+            lineas.append(f"{'  ' * nivel}{nombre}")
+
+    escribir(arbol, 1)
     return "\n".join(lineas)

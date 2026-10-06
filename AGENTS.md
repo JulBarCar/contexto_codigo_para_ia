@@ -26,8 +26,13 @@ python -m py_compile code_context.py modules/aliases/resolver.py modules/imports
 Generate an agent map from this repo:
 
 ```bash
-python code_context.py . --json --stdout --max-stdout 100000 \
-  --co --objetivo "understand this repository" --sin-instrucciones
+python code_context.py . --agent-map "understand this repository"
+```
+
+Diagnose installation:
+
+```bash
+python code_context.py doctor --json
 ```
 
 Install on Windows after changes:
@@ -47,8 +52,7 @@ bash setup_linux.sh
 For an unfamiliar repository, use the installed CLI like this:
 
 ```bash
-contexto . --json --stdout --max-stdout 100000 \
-  --co --objetivo "<task>" --sin-instrucciones
+contexto . --agent-map "<task>"
 ```
 
 Then request only selected files:

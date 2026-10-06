@@ -36,8 +36,7 @@ contexto --ayuda
 Then verify the agent-oriented contract:
 
 ```bash
-contexto . --json --stdout --max-stdout 100000 \
-  --co --objetivo "understand this repository" --sin-instrucciones
+contexto . --agent-map "understand this repository"
 ```
 
 Expected behavior:
@@ -47,15 +46,16 @@ Expected behavior:
 - `mode` is `mapa_ia`.
 - `content` contains XML-like context.
 - `<file_index>` is present.
+- `<recommended_files>` is present when useful files are detected.
 - `<dependency_graph>` is present.
+- JSON includes token-saving metrics when available.
 
 ## Recommended Agent Workflow
 
 Survey first, no source code:
 
 ```bash
-contexto . --json --stdout --max-stdout 100000 \
-  --co --objetivo "<task>" --sin-instrucciones
+contexto . --agent-map "<task>"
 ```
 
 Request only needed files:
@@ -79,8 +79,30 @@ The skill tells opencode agents to:
 - Use the structural map before reading source code.
 - Prefer `--json --stdout` for machine consumption.
 - Inspect `content` from the JSON payload.
-- Pick files from `path`, `symbols`, `tokens`, `imports`, `depends_on` and `<dependency_graph>`.
+- Pick files from `path`, `role`, `symbols`, `tokens`, `imports`, `depends_on`, `used_by`, `<recommended_files>` and `<dependency_graph>`.
 - Use `--archivos` for precise follow-up context.
+
+If `--agent-map` is unavailable, use the equivalent long form:
+
+```bash
+contexto . --json --stdout --max-stdout 100000 \
+  --co --objetivo "<task>" --sin-instrucciones
+```
+
+## Diagnostics
+
+Check the installed version:
+
+```bash
+contexto --version
+```
+
+Run installation diagnostics:
+
+```bash
+contexto doctor
+contexto doctor --json
+```
 
 ## When To Use A Budget
 
